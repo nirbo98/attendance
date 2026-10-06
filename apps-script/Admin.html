@@ -77,7 +77,8 @@ function call(fn, ...args) {
 const ERR = {
   badpin: 'קוד שגוי.', nosession: 'אין שיעור פעיל.', roundopen: 'יש סבב פתוח. חכי שייסגר או סגרי אותו.',
   notfound: 'הת"ז לא נמצאה.', busy: 'עומס רגעי, נסי שוב.', nosetup: 'לא בוצעה הגדרה ראשונית בגיליון.',
-  noidcol: 'לא מצאתי עמודה של ת"ז ברשימה שהודבקה.', empty: 'לא הודבק כלום.', server: 'תקלה בשרת.'
+  noidcol: 'לא מצאתי עמודה של ת"ז ברשימה שהודבקה.',
+  nourl: 'חסרה כתובת המערכת. בגיליון: תפריט נוכחות, "עדכון כתובת המערכת".', empty: 'לא הודבק כלום.', server: 'תקלה בשרת.'
 };
 function errText(e) { return (e && ERR[e.error]) || 'תקלה.'; }
 function mmss(ms) { ms = Math.max(0, ms); const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
@@ -109,6 +110,8 @@ function dashboard() {
   root.innerHTML =
     '<h1>ניהול נוכחות</h1>' +
     '<div class="grid">' +
+      (S.urlMissing ? '<div class="card hl" style="border-color:var(--bad)"><h2 style="color:var(--bad)">צריך להשלים הגדרה אחת</h2>' +
+        '<p>המערכת לא יודעת את הכתובת הציבורית שלה, ולכן הקוד על המקרן לא יעבוד לסטודנטים. בגיליון, בתפריט <b>נוכחות</b>, בחרי <b>עדכון כתובת המערכת</b> והדביקי את הכתובת שמסתיימת ב-/exec מחלון הפריסה. אחר כך רענני את הדף הזה.</p></div>' : '') +
       (needRoster ? '<div class="card hl" id="importCard"></div>' : '') +
       '<div class="card" id="sessCard"></div>' +
       '<div class="card" id="liveCard"></div>' +
@@ -320,6 +323,7 @@ async function tickCode() {
     const ln = document.getElementById('liveNum'); if (ln) ln.textContent = r.count;
     codeTimer = setTimeout(tickCode, Math.max(400, r.msLeft + 250));
   } catch (e) {
+    if (e && e.error === 'nourl') { stopCode(); const m = document.getElementById('sessMsg'); if (m) m.textContent = ERR.nourl; return; }
     codeTimer = setTimeout(tickCode, 2000);
   }
 }

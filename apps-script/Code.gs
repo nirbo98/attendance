@@ -55,6 +55,7 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('נוכחות')
     .addItem('הגדרה ראשונית', 'setupMenu')
     .addItem('הקישור למסך המרצה', 'linksMenu')
+    .addItem('עדכון כתובת המערכת', 'setUrlMenu')
     .addSeparator()
     .addItem('שינוי קוד מנהל', 'changePinMenu')
     .addItem('הפקת דוח נוכחות', 'reportMenu')
@@ -75,16 +76,29 @@ function setupMenu() {
   );
 }
 
+// גוגל לא תמיד מחזיר את הכתובת הציבורית של המערכת (לפעמים מחזיר כתובת פיתוח שנפתחת רק לבעלים).
+// לכן הכתובת נשמרת פעם אחת, בהדבקה מחלון הפריסה.
+const WEBAPP_RX = /^https:\/\/script\.google\.com\/(?:a\/macros\/([^/]+)|macros)\/s\/([\w-]+)\/exec$/;
+
+function setUrlMenu() {
+  const ui = SpreadsheetApp.getUi();
+  const res = ui.prompt('כתובת המערכת',
+    'הדביקי כאן את הכתובת שהופיעה בסוף הפריסה (אפליקציית אינטרנט). היא מתחילה ב-https://script.google.com ומסתיימת ב-/exec',
+    ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return false;
+  const url = String(res.getResponseText() || '').trim().replace(/[?#].*$/, '');
+  if (!WEBAPP_RX.test(url)) {
+    ui.alert('זו לא הכתובת הנכונה. צריך את הכתובת שמסתיימת ב-/exec, מחלון "פריסה" ב-Apps Script.');
+    return false;
+  }
+  props_().setProperty('WEBAPP_URL', url);
+  return true;
+}
+
 function linksMenu() {
   const ui = SpreadsheetApp.getUi();
-  const url = ScriptApp.getService().getUrl();
-  if (!url) {
-    ui.alert('המערכת עוד לא הופעלה.\n\n' +
-      'בתפריט Extensions בחרו Apps Script, ואז Deploy > New deployment > Web app.\n' +
-      'Execute as: Me, Who has access: Anyone, ואז Deploy.');
-    return;
-  }
-  const admin = url + '?admin';
+  if (!props_().getProperty('WEBAPP_URL') && !setUrlMenu()) return;
+  const admin = props_().getProperty('WEBAPP_URL') + '?admin';
   const html = HtmlService.createHtmlOutput(
     '<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">' +
     '<p>זה הקישור למסך המרצה. שמרי אותו כסימנייה במחשב שמחובר למקרן, ואפשר גם בטלפון:</p>' +
@@ -307,6 +321,7 @@ function adminLogin(pin) {
       rotate: CFG.ROTATE_SECONDS,
       spotSize: CFG.SPOT_CHECK_SIZE,
       roundMinutes: CFG.ROUND_MINUTES,
+      urlMissing: !baseUrl_(),
       frontendAvailable: !!CFG.FRONTEND_URL && !!apiKey_(),
       frontendOn: frontendOn_()
     };
@@ -373,6 +388,7 @@ function getCode(pin) {
   return adminApi_(pin, () => {
     const a = active_();
     if (!a || !a.open) return { open: false };
+    if (!baseUrl_()) throw E_('nourl');
     const ms = CFG.ROTATE_SECONDS * 1000;
     const sl = slot_();
     return {
@@ -677,7 +693,12 @@ function sheet_(name) {
   if (!sh) throw E_('nosetup');
   return sh;
 }
-function baseUrl_() { return ScriptApp.getService().getUrl(); }
+function baseUrl_() {
+  const saved = props_().getProperty('WEBAPP_URL');
+  if (saved) return saved;
+  const u = String(ScriptApp.getService().getUrl() || '');
+  return WEBAPP_RX.test(u) ? u : '';
+}
 
 // הכתובת שבקוד על המקרן: הדף החיצוני כשהוא פעיל, אחרת דף הגיבוי של Apps Script
 function studentUrl_(a, sl) {
@@ -687,7 +708,7 @@ function studentUrl_(a, sl) {
 }
 function frontendOn_() { return !!CFG.FRONTEND_URL && props_().getProperty('FRONTEND') !== 'off'; }
 function apiKey_() {
-  const m = String(baseUrl_() || '').match(/^https:\/\/script\.google\.com\/(?:a\/macros\/([^/]+)|macros)\/s\/([\w-]+)\/exec$/);
+  const m = String(baseUrl_() || '').match(WEBAPP_RX);
   if (!m) return '';
   return 'k=' + m[2] + (m[1] ? '&d=' + encodeURIComponent(m[1]) : '');
 }
