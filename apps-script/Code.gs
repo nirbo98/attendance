@@ -68,13 +68,13 @@ function setupMenu() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   // עותק חדש של הגיליון: מתחילים מאפס, כדי שסוד החתימה וקוד המנהל לא יועברו מהמקור
   if (props_().getProperty('SHEET_ID') !== ss.getId()) {
-    ['SECRET', 'ADMIN_PIN_HASH', 'ACTIVE'].forEach(k => props_().deleteProperty(k));
+    ['SECRET', 'ADMIN_PIN_HASH', 'ACTIVE', 'WEBAPP_URL', 'FRONTEND'].forEach(k => props_().deleteProperty(k));
   }
   setup_(ss.getId());
   if (!props_().getProperty('ADMIN_PIN_HASH')) changePinMenu();
   SpreadsheetApp.getUi().alert(
     'ההגדרה הושלמה.\n\n' +
-    'השלב הבא: הפעלת המערכת (Deploy), לפי המדריך. את רשימת הסטודנטים מדביקים אחר כך במסך המרצה.'
+    'השלב הבא: הפעלת המערכת (פריסה), לפי המדריך. אחרי הפריסה בוחרים כאן בתפריט "הקישור למסך המרצה" ומדביקים את הכתובת שהתקבלה.'
   );
 }
 
