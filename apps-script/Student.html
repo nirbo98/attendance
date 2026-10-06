@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  :root { --bg:#f6f4ef; --card:#fff; --ink:#1d1d1b; --mute:#6b6a65; --ok:#1f7a4d; --bad:#b3261e; --line:#e2dfd6; --accent:#1d3557; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Arial,sans-serif; background:var(--bg); color:var(--ink); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; }
+  main { width:100%; max-width:420px; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:28px 22px; text-align:center; }
+  h1 { font-size:22px; margin:8px 0 6px; }
+  p { color:var(--mute); line-height:1.5; margin:6px 0; }
+  .big { font-size:64px; line-height:1; }
+  .ok { color:var(--ok); }
+  .bad { color:var(--bad); }
+  input { width:100%; font-size:22px; padding:14px; border:1px solid var(--line); border-radius:12px; text-align:center; letter-spacing:2px; margin:14px 0 6px; direction:ltr; }
+  button { width:100%; font-size:18px; padding:14px; border:0; border-radius:12px; background:var(--accent); color:#fff; margin-top:10px; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  button:disabled { opacity:.5; }
+  .name { font-size:24px; font-weight:700; margin:14px 0; color:var(--ink); }
+  .clock { font-variant-numeric:tabular-nums; font-size:40px; font-weight:700; margin:12px 0 4px; direction:ltr; }
+  .pulse { width:14px; height:14px; border-radius:50%; background:var(--ok); display:inline-block; animation:p 1s infinite; vertical-align:middle; margin-left:6px; }
+  @keyframes p { 0%,100%{opacity:1; transform:scale(1);} 50%{opacity:.3; transform:scale(.6);} }
+  .small { font-size:12px; margin-top:14px; }
+  .warn { background:#fff4e5; color:#7a4b00; border-radius:10px; padding:10px; font-size:14px; margin-top:14px; }
+  .spin { width:36px; height:36px; border:4px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:s 0.8s linear infinite; margin:10px auto; }
+  @keyframes s { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const BOOT = <?!= boot ?>;
+const STORE = 'att_device_v1';
+const app = document.getElementById('app');
+let enteredId = '';
+let storageOk = true;
+let myToken = '';
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function getToken() { try { return localStorage.getItem(STORE); } catch (e) { return null; } }
+function saveToken(t) { try { localStorage.setItem(STORE, t); return localStorage.getItem(STORE) === t; } catch (e) { return false; } }
+function newToken() { const a = new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
+function call(fn, arg) {
+  return new Promise((res, rej) => google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](arg));
+}
+function auth(extra) { return Object.assign({ s: BOOT.s, r: BOOT.r, issued: BOOT.issued, pass: BOOT.pass }, extra || {}); }
+
+const MSG = {
+  expired: ['⏱', 'הקוד פג תוקף', 'סרקו שוב את הקוד שעל המסך. הוא מתחלף כל כמה שניות.'],
+  closed: ['🔒', 'הרישום סגור', 'כרגע אין סבב רישום פתוח.'],
+  noscan: ['📷', 'רישום נוכחות', 'סרקו את הקוד שמוקרן על המסך בכיתה.'],
+  notfound: ['❓', 'מספר לא מוכר', 'המספר שהוזן לא נמצא ברשימת הקורס. בדקו שהקלדתם נכון, ואם כן — פנו למרצה.'],
+  alreadyother: ['⚠️', 'כבר נרשמת ממכשיר אחר', 'הת"ז הזו כבר סומנה בסבב הנוכחי ממכשיר אחר. אם זו טעות — פנו למרצה.'],
+  busy: ['⏳', 'עומס רגעי', 'נסו שוב בעוד כמה שניות.'],
+  server: ['⚠️', 'תקלה', 'משהו השתבש. סרקו שוב את הקוד.']
+};
+
+function screen(icon, title, text, cls) {
+  app.innerHTML = '<div class="big ' + (cls || '') + '">' + icon + '</div><h1>' + esc(title) + '</h1><p>' + esc(text) + '</p>';
+}
+function showError(res) {
+  if (res && res.error === 'devicetaken') {
+    return screen('📱', 'המכשיר כבר רשום', 'הטלפון הזה רשום על שם ' + (res.detail || 'סטודנט אחר') + '. כל טלפון יכול לסמן נוכחות לסטודנט אחד בלבד.', 'bad');
+  }
+  const m = MSG[res && res.error] || MSG.server;
+  screen(m[0], m[1], m[2], 'bad');
+}
+function loading(text) { app.innerHTML = '<div class="spin"></div><p>' + esc(text) + '</p>'; }
+
+function success(res) {
+  app.innerHTML =
+    '<div class="big ok">✓</div>' +
+    '<h1>' + (res.already ? 'כבר נרשמת לסבב הזה' : 'הנוכחות נרשמה') + '</h1>' +
+    '<div class="name">' + esc(res.name) + '</div>' +
+    '<p>סבב ' + esc(res.r) + (BOOT.label ? ' · ' + esc(BOOT.label) : '') + '</p>' +
+    '<div class="clock" id="clk"></div><p><span class="pulse"></span>אישור חי</p>' +
+    (storageOk ? '' : '<div class="warn">הדפדפן לא שומר נתונים (אולי גלישה בסתר). בפעם הבאה פתחו בדפדפן רגיל, אחרת הרישום שלכם יסומן לבדיקה.</div>') +
+    '<button class="ghost" id="mine">כמה נוכחויות יש לי?</button><p id="mineOut"></p>' +
+    (res.row ? '<p class="small">אם הדפדפן מבקש מיקום: הוא משמש רק לבדיקה שהרישום נעשה מהכיתה, ולא נשמר מעבר לזה.</p>' : '');
+  const tick = () => { const el = document.getElementById('clk'); if (el) el.textContent = new Date().toLocaleTimeString('he-IL', { hour12: false }); };
+  tick(); setInterval(tick, 1000);
+  document.getElementById('mine').onclick = async function () {
+    this.disabled = true;
+    const out = document.getElementById('mineOut');
+    try {
+      const m = await call('myAttendance', auth({ token: myToken }));
+      out.textContent = m.error ? 'אי אפשר לבדוק כרגע. סרקו שוב בשיעור הבא.' : 'נוכחות מלאה ב-' + m.full + ' מתוך ' + m.total + ' שיעורים עד עכשיו.';
+    } catch (e) { out.textContent = 'אי אפשר לבדוק כרגע.'; }
+  };
+  if (res.row) sendLocation(res.row);
+}
+
+// לא חוסם את הרישום: אם אין מיקום, אין מיקום
+function sendLocation(row) {
+  if (!navigator.geolocation) return;
+  try {
+    navigator.geolocation.getCurrentPosition(p => {
+      call('attachLocation', auth({ token: myToken, row: row, lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy })).catch(() => {});
+    }, () => {}, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+  } catch (e) {}
+}
+
+function askId() {
+  app.innerHTML =
+    '<div class="big">👋</div><h1>רישום ראשון במכשיר הזה</h1>' +
+    '<p>הזינו את מספר תעודת הזהות שלכם. אחרי זה הטלפון יזכור אתכם, ובשיעורים הבאים מספיק לסרוק.</p>' +
+    '<input id="idin" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="מספר ת״ז">' +
+    '<button id="go">המשך</button>';
+  const inp = document.getElementById('idin');
+  const go = document.getElementById('go');
+  inp.focus();
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
+  go.onclick = async () => {
+    const v = inp.value.replace(/\D/g, '');
+    if (v.length < 5) { inp.focus(); return; }
+    go.disabled = true;
+    try {
+      const res = await call('lookupId', auth({ id: v }));
+      if (res.error) { go.disabled = false; return showError(res); }
+      enteredId = v;
+      confirmName(res.name);
+    } catch (e) { showError(null); }
+  };
+}
+
+function confirmName(name) {
+  app.innerHTML =
+    '<div class="big">🪪</div><h1>זה אתם?</h1><div class="name">' + esc(name) + '</div>' +
+    '<p>אחרי האישור הטלפון הזה ייקשר לשם הזה.</p>' +
+    '<button id="yes">כן, זה אני</button><button id="no" class="ghost">לא, הקלדתי לא נכון</button>';
+  document.getElementById('no').onclick = askId;
+  document.getElementById('yes').onclick = async () => {
+    loading('רושם…');
+    let token = getToken();
+    if (!/^[a-f0-9]{32}$/.test(token || '')) token = newToken();
+    storageOk = saveToken(token);
+    myToken = token;
+    try {
+      const res = await call('register', auth({ id: enteredId, token: token }));
+      if (res.error) return showError(res);
+      success(res);
+    } catch (e) { showError(null); }
+  };
+}
+
+async function start() {
+  if (BOOT.state !== 'ok') { const m = MSG[BOOT.state] || MSG.noscan; return screen(m[0], m[1], m[2], BOOT.state === 'noscan' ? '' : 'bad'); }
+  loading('רושם נוכחות…');
+  const token = getToken();
+  myToken = token || '';
+  try {
+    const res = await call('checkIn', auth({ token: myToken }));
+    if (res.error) return showError(res);
+    if (res.needRegister) return askId();
+    success(res);
+  } catch (e) { showError(null); }
+}
+start();
+</script>
+</body>
+</html>

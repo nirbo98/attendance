@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root { --bg:#f6f4ef; --card:#fff; --ink:#1d1d1b; --mute:#6b6a65; --ok:#1f7a4d; --bad:#b3261e; --line:#e2dfd6; --accent:#1d3557; --warn:#b7791f; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Arial,sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:980px; margin:0 auto; padding:20px 16px 60px; }
+  h1 { font-size:24px; margin:4px 0 16px; }
+  h2 { font-size:17px; margin:0 0 12px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:760px) { .grid { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; }
+  .card.hl { border:2px solid var(--accent); grid-column:1 / -1; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { font-size:15px; padding:10px 16px; border-radius:10px; border:0; background:var(--accent); color:#fff; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  button.okb { background:var(--ok); }
+  button.badb { background:var(--bad); }
+  button:disabled { opacity:.45; cursor:default; }
+  input, textarea { font-size:15px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; flex:1; min-width:140px; font-family:inherit; }
+  textarea { width:100%; height:110px; direction:ltr; text-align:left; }
+  .stat { font-size:42px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .mute { color:var(--mute); font-size:14px; }
+  .pill { display:inline-block; font-size:13px; padding:3px 10px; border-radius:20px; background:#eef1f6; color:var(--accent); }
+  .pill.open { background:#e6f4ec; color:var(--ok); }
+  .pill.flag { background:#fdf3e1; color:var(--warn); }
+  #qrSmall { display:flex; justify-content:center; padding:10px; background:#fff; }
+  .spot { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); gap:8px; }
+  .spot:last-child { border-bottom:0; }
+  .spot .nm { font-size:17px; font-weight:700; }
+  .msg { margin-top:10px; font-size:14px; }
+  .login { max-width:360px; margin:12vh auto; }
+  /* הקרנה */
+  .overlay { position:fixed; inset:0; background:#fff; display:none; flex-direction:column; align-items:center; justify-content:center; z-index:10; padding:4vh; }
+  .overlay.on { display:flex; }
+  .overlay .top { font-size:3.2vh; color:var(--mute); margin-bottom:2vh; text-align:center; }
+  .overlay .exit { position:absolute; top:16px; left:16px; }
+  #proj .cnt { font-size:5vh; font-weight:800; margin-top:2vh; font-variant-numeric:tabular-nums; }
+  #bar { width:min(80vh,80vw); height:1vh; background:#eee; border-radius:1vh; overflow:hidden; margin-top:1.5vh; }
+  #bar i { display:block; height:100%; background:var(--accent); width:100%; }
+  #namesList { display:grid; grid-template-columns:1fr 1fr; gap:1.5vh 6vw; font-size:4.2vh; font-weight:700; margin-top:2vh; }
+</style>
+</head>
+<body>
+<div id="root" class="wrap"></div>
+
+<div id="proj" class="overlay">
+  <button class="ghost exit" onclick="overlayOff()">יציאה (Esc)</button>
+  <div class="top" id="projTop"></div>
+  <div id="qrBig"></div>
+  <div id="bar"><i id="barFill"></i></div>
+  <div class="cnt" id="projCnt"></div>
+</div>
+
+<div id="names" class="overlay">
+  <button class="ghost exit" onclick="overlayOff()">יציאה (Esc)</button>
+  <div class="top" style="font-size:4.5vh;color:var(--ink);font-weight:700">מי ששמו מופיע — הרימו יד</div>
+  <div id="namesList"></div>
+</div>
+
+<script>
+let PIN = '';
+let S = null;
+let qrSmall = null, qrBig = null, codeTimer = null, statsTimer = null, countdownTimer = null;
+let spotList = [];
+const root = document.getElementById('root');
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function call(fn, ...args) {
+  return new Promise((res, rej) => google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](PIN, ...args))
+    .then(r => { if (r && r.error) throw r; return r; });
+}
+const ERR = {
+  badpin: 'קוד שגוי.', nosession: 'אין שיעור פעיל.', roundopen: 'יש סבב פתוח. חכי שייסגר או סגרי אותו.',
+  notfound: 'הת"ז לא נמצאה.', busy: 'עומס רגעי, נסי שוב.', nosetup: 'לא בוצעה הגדרה ראשונית בגיליון.',
+  noidcol: 'לא מצאתי עמודה של ת"ז ברשימה שהודבקה.', empty: 'לא הודבק כלום.', server: 'תקלה בשרת.'
+};
+function errText(e) { return (e && ERR[e.error]) || 'תקלה.'; }
+function mmss(ms) { ms = Math.max(0, ms); const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+
+// ===== כניסה =====
+function loginView(msg) {
+  root.innerHTML =
+    '<div class="card login"><h1>ניהול נוכחות</h1>' +
+    '<div class="row"><input id="pin" type="password" placeholder="קוד מנהל" autocomplete="current-password"><button id="lg">כניסה</button></div>' +
+    '<div class="msg" style="color:var(--bad)">' + esc(msg || '') + '</div></div>';
+  const p = document.getElementById('pin');
+  p.focus();
+  p.addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+  document.getElementById('lg').onclick = login;
+}
+async function login() {
+  PIN = document.getElementById('pin').value;
+  document.getElementById('lg').disabled = true;
+  try {
+    S = await call('adminLogin');
+    try { sessionStorage.setItem('att_pin', PIN); } catch (e) {}
+    dashboard();
+  } catch (e) { loginView(errText(e)); }
+}
+
+// ===== לוח בקרה =====
+function dashboard() {
+  const needRoster = !S.rosterSize;
+  root.innerHTML =
+    '<h1>ניהול נוכחות</h1>' +
+    '<div class="grid">' +
+      (needRoster ? '<div class="card hl" id="importCard"></div>' : '') +
+      '<div class="card" id="sessCard"></div>' +
+      '<div class="card" id="liveCard"></div>' +
+      '<div class="card" id="spotCard"></div>' +
+      '<div class="card" id="toolsCard"></div>' +
+    '</div>';
+  if (needRoster) renderImport('importCard', true);
+  renderSession();
+  renderLive();
+  renderSpot();
+  renderTools();
+  if (S.active && S.active.open) startCode(); else stopCode();
+  clearInterval(statsTimer);
+  statsTimer = setInterval(refreshStats, 15000);
+  refreshStats();
+}
+
+async function refreshState() {
+  try { S = await call('adminLogin'); renderSession(); refreshStats(); } catch (e) {}
+}
+
+function renderSession() {
+  const a = S.active, el = document.getElementById('sessCard');
+  clearInterval(countdownTimer);
+  if (!a) {
+    el.innerHTML =
+      '<h2>שיעור</h2><p class="mute">אין שיעור פעיל היום.</p>' +
+      '<div class="row"><input id="lbl" placeholder="כותרת (לא חובה), למשל: הרצאה 3"><button id="st">התחלת שיעור</button></div>' +
+      '<div class="msg" id="sessMsg"></div>';
+    document.getElementById('st').onclick = act(() => call('startSession', document.getElementById('lbl').value));
+    return;
+  }
+  if (a.open) {
+    el.innerHTML =
+      '<h2>' + esc(a.label || 'שיעור היום') + '</h2>' +
+      '<p><span class="pill open">סבב ' + a.r + ' פתוח</span> <span class="mute">נסגר לבד בעוד <b id="cd"></b></span></p>' +
+      '<div class="row"><button id="proj1">הקרנת הקוד</button><button class="ghost" id="cl">סגירה עכשיו</button></div>' +
+      '<div id="qrSmall" style="margin-top:12px"></div><div class="msg" id="sessMsg"></div>';
+    document.getElementById('proj1').onclick = projOn;
+    document.getElementById('cl').onclick = act(() => call('closeRound'));
+    const end = a.openedAt + S.roundMinutes * 60000;
+    const tick = () => { const c = document.getElementById('cd'); if (c) c.textContent = mmss(end - Date.now()); };
+    tick(); countdownTimer = setInterval(tick, 1000);
+    return;
+  }
+  el.innerHTML =
+    '<h2>' + esc(a.label || 'שיעור היום') + '</h2>' +
+    '<p><span class="pill">' + (a.r ? a.r + ' סבבים הושלמו' : 'טרם נפתח סבב') + '</span></p>' +
+    '<div class="row"><button id="op">' + (a.r ? 'פתיחת סבב בדיקה ' + (a.r + 1) : 'פתיחת סבב 1') + '</button>' +
+    '<button class="ghost" id="nw">שיעור חדש</button></div>' +
+    '<p class="mute" style="margin-top:10px">סבב נסגר לבד אחרי ' + S.roundMinutes + ' דקות. את סבב הבדיקה כדאי לפתוח בזמן אקראי באמצע השיעור, בלי הודעה מראש.</p>' +
+    '<div class="msg" id="sessMsg"></div>';
+  document.getElementById('op').onclick = act(() => call('openRound'), true);
+  document.getElementById('nw').onclick = () => { if (confirm('לפתוח שיעור חדש? השיעור הנוכחי יישמר כמו שהוא.')) act(() => call('startSession', ''))(); };
+}
+
+function act(fn, project) {
+  return async () => {
+    const m = document.getElementById('sessMsg');
+    try {
+      S.active = await fn();
+      renderSession();
+      if (S.active && S.active.open) { startCode(); if (project) projOn(); } else stopCode();
+      refreshStats();
+    } catch (e) { if (m) m.textContent = errText(e); }
+  };
+}
+
+function renderLive(st) {
+  const el = document.getElementById('liveCard');
+  if (!el) return;
+  if (!S.active) {
+    el.innerHTML = '<h2>נוכחות</h2><p class="mute">' + S.registered + ' מתוך ' + S.rosterSize + ' סטודנטים כבר קשרו טלפון.</p>';
+    return;
+  }
+  const rounds = (st && st.rounds) || [];
+  const last = rounds.length ? rounds[rounds.length - 1].count : 0;
+  el.innerHTML =
+    '<h2>נוכחות חיה</h2>' +
+    '<div class="stat" id="liveNum">' + last + '</div><p class="mute">נרשמו בסבב האחרון, מתוך ' + S.rosterSize + ' בקורס</p>' +
+    rounds.map(x => '<div class="row" style="justify-content:space-between"><span>סבב ' + x.r + '</span><b>' + x.count + '</b></div>').join('') +
+    (st && (st.rebind || st.far) ? '<p style="margin-top:10px">' +
+      (st.far ? '<span class="pill flag">' + st.far + ' נרשמו רחוק מהכיתה</span> ' : '') +
+      (st.rebind ? '<span class="pill flag">' + st.rebind + ' החליפו טלפון</span>' : '') +
+      '</p><p class="mute">הם יופיעו ראשונים בבדיקת הפתע.</p>' : '');
+}
+async function refreshStats() {
+  if (!S.active) return renderLive();
+  try { renderLive(await call('getStats')); } catch (e) {}
+}
+
+// ===== בדיקת פתע =====
+function renderSpot(msg) {
+  const el = document.getElementById('spotCard');
+  el.innerHTML =
+    '<h2>בדיקת פתע</h2>' +
+    '<p class="mute">' + S.spotSize + ' שמות מבין מי שנרשם היום, מסומנים קודם. מקרינים את השמות, ומי ששמו מופיע מרים יד. מי שלא נמצא מאבד את הנוכחות של השיעור הזה בלבד.</p>' +
+    '<div class="row"><button id="sp"' + (S.active ? '' : ' disabled') + '>שליפת שמות</button>' +
+    '<button class="ghost" id="spShow" style="display:none">הקרנת השמות</button></div>' +
+    '<div id="spotList" style="margin-top:10px"></div><div class="msg">' + esc(msg || '') + '</div>' +
+    '<p class="mute" id="spTip" style="display:none">טיפ: אפשר לסמן מהטלפון (אותו קישור ואותו קוד) בזמן שהשמות מוקרנים מהמחשב.</p>';
+  document.getElementById('spShow').onclick = namesOn;
+  document.getElementById('sp').onclick = async () => {
+    try {
+      spotList = await call('spotCheck');
+      if (!spotList.length) return renderSpot('אין עוד שמות לבדיקה בשיעור הזה.');
+      document.getElementById('spShow').style.display = '';
+      document.getElementById('spTip').style.display = '';
+      const box = document.getElementById('spotList');
+      box.innerHTML = spotList.map(x =>
+        '<div class="spot" data-id="' + esc(x.id) + '"><div><span class="nm">' + esc(x.name) + '</span> ' +
+        (x.flagged ? '<span class="pill flag">מסומן</span>' : '') + '</div>' +
+        '<div class="row"><button class="okb" data-p="1">נמצא</button><button class="badb" data-p="0">לא נמצא</button></div></div>').join('');
+      box.querySelectorAll('button').forEach(b => b.onclick = async () => {
+        const row = b.closest('.spot');
+        row.querySelectorAll('button').forEach(x => x.disabled = true);
+        try {
+          await call('markSpot', row.dataset.id, b.dataset.p === '1');
+          row.querySelector('.row').innerHTML = b.dataset.p === '1' ? '<span class="pill open">נמצא</span>' : '<span class="pill" style="background:#fbe9e7;color:var(--bad)">נפסל</span>';
+        } catch (e) { row.querySelectorAll('button').forEach(x => x.disabled = false); alert(errText(e)); }
+      });
+    } catch (e) { renderSpot(errText(e)); }
+  };
+}
+function namesOn() {
+  document.getElementById('namesList').innerHTML = spotList.map(x => '<div>' + esc(x.name) + '</div>').join('');
+  document.getElementById('names').classList.add('on');
+  fullscreen(true);
+}
+
+// ===== כלים =====
+function renderImport(id, first) {
+  const el = document.getElementById(id);
+  el.innerHTML =
+    '<h2>' + (first ? 'שלב ראשון: רשימת הסטודנטים' : 'ייבוא או עדכון רשימה') + '</h2>' +
+    '<p class="mute">פתחי את קובץ המשתתפים שייצאת מהמודל, סמני הכול (Ctrl+A), העתיקי והדביקי כאן. המערכת מזהה לבד את עמודות הת"ז והשם. אפשר לייבא שוב בכל שלב, ומי שכבר ברשימה לא יימחק.</p>' +
+    '<textarea id="rosterTxt" placeholder="הדביקי כאן"></textarea>' +
+    '<div class="row" style="margin-top:8px"><button id="imp">ייבוא</button></div><div class="msg" id="impMsg"></div>';
+  document.getElementById('imp').onclick = async () => {
+    const m = document.getElementById('impMsg');
+    m.textContent = 'מייבא…';
+    try {
+      const r = await call('importRoster', document.getElementById('rosterTxt').value);
+      m.textContent = 'נוספו ' + r.added + ', עודכנו ' + r.updated + (r.skipped ? ', דולגו ' + r.skipped + ' שורות בלי ת"ז' : '') + '. סך הכול ' + r.total + ' סטודנטים.';
+      S.rosterSize = r.total;
+      document.getElementById('rosterTxt').value = '';
+    } catch (e) { m.textContent = errText(e); }
+  };
+}
+
+function renderTools() {
+  const el = document.getElementById('toolsCard');
+  el.innerHTML =
+    '<h2>כלים</h2>' +
+    '<div class="row"><button id="rep">עדכון דוח נוכחות</button></div>' +
+    '<p class="mute">הדוח מופיע בלשונית "דוח נוכחות" בגיליון. מי שמתחת ל-80% מסומן באדום.</p>' +
+    '<p class="mute" style="margin-top:14px">סטודנט החליף טלפון? איפוס מאפשר לו להירשם מחדש בלי סימון.</p>' +
+    '<div class="row"><input id="rid" inputmode="numeric" placeholder="ת״ז"><button class="ghost" id="rs">איפוס טלפון</button></div>' +
+    '<div class="row" style="margin-top:14px"><button class="ghost" id="impOpen">ייבוא או עדכון רשימת סטודנטים</button></div>' +
+    '<div id="impBox"></div>' +
+    (S.frontendAvailable ?
+      '<p class="mute" style="margin-top:14px">דף הסטודנטים: <b>' + (S.frontendOn ? 'הדף המהיר (כולל מיקום)' : 'דף הגיבוי') + '</b>. אם הדף המהיר לא נטען לסטודנטים, עברי לגיבוי.</p>' +
+      '<div class="row"><button class="ghost" id="fe">' + (S.frontendOn ? 'מעבר לדף הגיבוי' : 'חזרה לדף המהיר') + '</button></div>' : '') +
+    '<div class="msg" id="toolMsg"></div>';
+  const m = document.getElementById('toolMsg');
+  const fe = document.getElementById('fe');
+  if (fe) fe.onclick = async () => {
+    try { const r = await call('setFrontend', !S.frontendOn); S.frontendOn = r.frontendOn; renderTools(); if (S.active && S.active.open) startCode(); }
+    catch (e) { m.textContent = errText(e); }
+  };
+  document.getElementById('rs').onclick = async () => {
+    try { const r = await call('resetDevice', document.getElementById('rid').value); m.textContent = 'הטלפון של ' + r.name + ' אופס.'; }
+    catch (e) { m.textContent = errText(e); }
+  };
+  document.getElementById('rep').onclick = async () => {
+    m.textContent = 'מעדכן…';
+    try { const r = await call('makeReport'); m.textContent = 'הדוח עודכן (' + r.sessions + ' שיעורים).'; }
+    catch (e) { m.textContent = errText(e); }
+  };
+  document.getElementById('impOpen').onclick = () => { renderImport('impBox', false); document.getElementById('impOpen').remove(); };
+}
+
+// ===== קוד מתחלף =====
+function drawQR(holderId, size, url, which) {
+  const el = document.getElementById(holderId);
+  if (!el || typeof QRCode === 'undefined') return;
+  let q = which === 'big' ? qrBig : qrSmall;
+  if (!q || !el.firstChild) {
+    el.innerHTML = '';
+    q = new QRCode(el, { text: url, width: size, height: size, correctLevel: QRCode.CorrectLevel.M });
+    if (which === 'big') qrBig = q; else qrSmall = q;
+  } else {
+    q.makeCode(url);
+  }
+}
+async function tickCode() {
+  clearTimeout(codeTimer);
+  try {
+    const r = await call('getCode');
+    if (!r.open) { stopCode(); refreshState(); return; }
+    drawQR('qrSmall', 220, r.url, 'small');
+    if (document.getElementById('proj').classList.contains('on')) {
+      const size = Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.66);
+      drawQR('qrBig', size, r.url, 'big');
+      document.getElementById('projTop').textContent = 'סרקו לרישום נוכחות · סבב ' + r.r + ' · נסגר בעוד ' + mmss(r.roundMsLeft);
+      document.getElementById('projCnt').textContent = 'נרשמו: ' + r.count;
+      animateBar(r.msLeft);
+    }
+    const ln = document.getElementById('liveNum'); if (ln) ln.textContent = r.count;
+    codeTimer = setTimeout(tickCode, Math.max(400, r.msLeft + 250));
+  } catch (e) {
+    codeTimer = setTimeout(tickCode, 2000);
+  }
+}
+function animateBar(ms) {
+  const f = document.getElementById('barFill');
+  f.style.transition = 'none'; f.style.width = Math.min(100, ms / (S.rotate * 10)) + '%';
+  void f.offsetWidth;
+  f.style.transition = 'width ' + ms + 'ms linear'; f.style.width = '0%';
+}
+function startCode() { qrSmall = null; tickCode(); }
+function stopCode() { clearTimeout(codeTimer); document.getElementById('proj').classList.remove('on'); }
+function projOn() {
+  qrBig = null; document.getElementById('qrBig').innerHTML = '';
+  document.getElementById('proj').classList.add('on');
+  fullscreen(true);
+  tickCode();
+}
+function overlayOff() {
+  document.querySelectorAll('.overlay').forEach(o => o.classList.remove('on'));
+  fullscreen(false);
+}
+function fullscreen(on) {
+  try {
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+    if (!on && document.fullscreenElement) document.exitFullscreen();
+  } catch (e) {}
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') overlayOff(); });
+
+// ===== התחלה =====
+(async () => {
+  let saved = '';
+  try { saved = sessionStorage.getItem('att_pin') || ''; } catch (e) {}
+  if (!saved) return loginView();
+  PIN = saved;
+  try { S = await call('adminLogin'); dashboard(); } catch (e) { loginView(); }
+})();
+</script>
+</body>
+</html>
