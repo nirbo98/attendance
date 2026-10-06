@@ -59,6 +59,8 @@ function onOpen() {
     .addSeparator()
     .addItem('שינוי קוד מנהל', 'changePinMenu')
     .addItem('הפקת דוח נוכחות', 'reportMenu')
+    .addSeparator()
+    .addItem('דף גיבוי (חירום בלבד)', 'backupMenu')
     .addToUi();
 }
 
@@ -107,6 +109,21 @@ function linksMenu() {
     '<p style="color:#666">לסטודנטים לא צריך לשלוח קישור. הקוד שעל המסך מוביל אותם לדף הנכון.</p></div>'
   ).setWidth(460).setHeight(290);
   ui.showModalDialog(html, 'הקישור למסך המרצה');
+}
+
+// מעבר בין דף הסטודנטים הרגיל (GitHub) לדף הגיבוי של Apps Script.
+// רק מהגיליון ולא ממסך המרצה, כדי שאף אחד לא יפעיל אותו בטעות באמצע שיעור.
+function backupMenu() {
+  const ui = SpreadsheetApp.getUi();
+  if (frontendOn_()) {
+    const r = ui.alert('דף גיבוי',
+      'להעביר את הסטודנטים לדף הגיבוי?\n\nרק אם הדף הרגיל לא נטען לסטודנטים. בדף הגיבוי, מי שמחובר בטלפון לכמה חשבונות גוגל לא יוכל להירשם.',
+      ui.ButtonSet.YES_NO);
+    if (r === ui.Button.YES) { props_().setProperty('FRONTEND', 'off'); ui.alert('הסטודנטים מופנים עכשיו לדף הגיבוי.'); }
+  } else {
+    const r = ui.alert('דף גיבוי', 'המערכת נמצאת עכשיו בדף הגיבוי. להחזיר לדף הרגיל?', ui.ButtonSet.YES_NO);
+    if (r === ui.Button.YES) { props_().setProperty('FRONTEND', 'on'); ui.alert('הסטודנטים מופנים שוב לדף הרגיל.'); }
+  }
 }
 
 function changePinMenu() {
@@ -462,13 +479,6 @@ function resetDevice(pin, id) {
     sheet_(SH.STUDENTS).getRange(st.row, 3).setValue('');
     return { name: st.name };
   }));
-}
-
-function setFrontend(pin, on) {
-  return adminApi_(pin, () => {
-    props_().setProperty('FRONTEND', on ? 'on' : 'off');
-    return { frontendOn: frontendOn_() };
-  });
 }
 
 function makeReport(pin) {

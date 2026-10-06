@@ -67,6 +67,7 @@ let PIN = '';
 let S = null;
 let qrSmall = null, qrBig = null, codeTimer = null, statsTimer = null, countdownTimer = null;
 let spotList = [];
+let roundEnd = 0;
 const root = document.getElementById('root');
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -112,6 +113,8 @@ function dashboard() {
     '<div class="grid">' +
       (S.urlMissing ? '<div class="card hl" style="border-color:var(--bad)"><h2 style="color:var(--bad)">צריך להשלים הגדרה אחת</h2>' +
         '<p>המערכת לא יודעת את הכתובת הציבורית שלה, ולכן הקוד על המקרן לא יעבוד לסטודנטים. בגיליון, בתפריט <b>נוכחות</b>, בחרי <b>עדכון כתובת המערכת</b> והדביקי את הכתובת שמסתיימת ב-/exec מחלון הפריסה. אחר כך רענני את הדף הזה.</p></div>' : '') +
+      (S.frontendAvailable && !S.frontendOn ? '<div class="card hl" style="border-color:var(--warn)"><h2 style="color:var(--warn)">הסטודנטים מופנים לדף הגיבוי</h2>' +
+        '<p>זה מצב חירום, למקרה שהדף הרגיל לא נטען. כדי לחזור: בגיליון, תפריט <b>נוכחות</b>, <b>דף גיבוי (חירום בלבד)</b>.</p></div>' : '') +
       (needRoster ? '<div class="card hl" id="importCard"></div>' : '') +
       '<div class="card" id="sessCard"></div>' +
       '<div class="card" id="liveCard"></div>' +
@@ -136,6 +139,7 @@ async function refreshState() {
 function renderSession() {
   const a = S.active, el = document.getElementById('sessCard');
   clearInterval(countdownTimer);
+  const sp = document.getElementById('sp'); if (sp) sp.disabled = !a;
   if (!a) {
     el.innerHTML =
       '<h2>שיעור</h2><p class="mute">אין שיעור פעיל היום.</p>' +
@@ -149,11 +153,12 @@ function renderSession() {
       '<h2>' + esc(a.label || 'שיעור היום') + '</h2>' +
       '<p><span class="pill open">סבב ' + a.r + ' פתוח</span> <span class="mute">נסגר לבד בעוד <b id="cd"></b></span></p>' +
       '<div class="row"><button id="proj1">הקרנת הקוד</button><button class="ghost" id="cl">סגירה עכשיו</button></div>' +
-      '<div id="qrSmall" style="margin-top:12px"></div><div class="msg" id="sessMsg"></div>';
+      '<div id="qrSmall" style="margin-top:12px"></div><p class="mute" id="qrDest" style="text-align:center"></p><div class="msg" id="sessMsg"></div>';
     document.getElementById('proj1').onclick = projOn;
     document.getElementById('cl').onclick = act(() => call('closeRound'));
-    const end = a.openedAt + S.roundMinutes * 60000;
-    const tick = () => { const c = document.getElementById('cd'); if (c) c.textContent = mmss(end - Date.now()); };
+    // הזמן שנשאר מגיע מהשרת, כדי ששעון לא מדויק במחשב לא ישבש את הספירה
+    if (!roundEnd) roundEnd = Date.now() + S.roundMinutes * 60000;
+    const tick = () => { const c = document.getElementById('cd'); if (c) c.textContent = mmss(roundEnd - Date.now()); };
     tick(); countdownTimer = setInterval(tick, 1000);
     return;
   }
@@ -173,6 +178,7 @@ function act(fn, project) {
     const m = document.getElementById('sessMsg');
     try {
       S.active = await fn();
+      roundEnd = 0;
       renderSession();
       if (S.active && S.active.open) { startCode(); if (project) projOn(); } else stopCode();
       refreshStats();
@@ -267,21 +273,14 @@ function renderTools() {
   el.innerHTML =
     '<h2>כלים</h2>' +
     '<div class="row"><button id="rep">עדכון דוח נוכחות</button></div>' +
-    '<p class="mute">הדוח מופיע בלשונית "דוח נוכחות" בגיליון. מי שמתחת ל-80% מסומן באדום.</p>' +
+    '<p class="mute">הדוח מופיע בלשונית "דוח נוכחות" בגיליון. מי שנוכחותו מתחת לשמונים אחוז מסומן באדום.</p>' +
     '<p class="mute" style="margin-top:14px">סטודנט החליף טלפון? איפוס מאפשר לו להירשם מחדש בלי סימון.</p>' +
     '<div class="row"><input id="rid" inputmode="numeric" placeholder="ת״ז"><button class="ghost" id="rs">איפוס טלפון</button></div>' +
     '<div class="row" style="margin-top:14px"><button class="ghost" id="impOpen">ייבוא או עדכון רשימת סטודנטים</button></div>' +
     '<div id="impBox"></div>' +
-    (S.frontendAvailable ?
-      '<p class="mute" style="margin-top:14px">דף הסטודנטים: <b>' + (S.frontendOn ? 'הדף המהיר (כולל מיקום)' : 'דף הגיבוי') + '</b>. אם הדף המהיר לא נטען לסטודנטים, עברי לגיבוי.</p>' +
-      '<div class="row"><button class="ghost" id="fe">' + (S.frontendOn ? 'מעבר לדף הגיבוי' : 'חזרה לדף המהיר') + '</button></div>' : '') +
     '<div class="msg" id="toolMsg"></div>';
   const m = document.getElementById('toolMsg');
-  const fe = document.getElementById('fe');
-  if (fe) fe.onclick = async () => {
-    try { const r = await call('setFrontend', !S.frontendOn); S.frontendOn = r.frontendOn; renderTools(); if (S.active && S.active.open) startCode(); }
-    catch (e) { m.textContent = errText(e); }
-  };
+
   document.getElementById('rs').onclick = async () => {
     try { const r = await call('resetDevice', document.getElementById('rid').value); m.textContent = 'הטלפון של ' + r.name + ' אופס.'; }
     catch (e) { m.textContent = errText(e); }
@@ -313,6 +312,9 @@ async function tickCode() {
     const r = await call('getCode');
     if (!r.open) { stopCode(); refreshState(); return; }
     drawQR('qrSmall', 220, r.url, 'small');
+    const dest = document.getElementById('qrDest');
+    if (dest) { try { dest.innerHTML = 'הקוד מוביל אל: <bdi dir="ltr">' + esc(new URL(r.url).host) + '</bdi>'; } catch (e) {} }
+    roundEnd = Date.now() + r.roundMsLeft;
     if (document.getElementById('proj').classList.contains('on')) {
       const size = Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.66);
       drawQR('qrBig', size, r.url, 'big');
