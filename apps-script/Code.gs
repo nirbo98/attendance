@@ -314,6 +314,14 @@ function adminLogin(pin) {
 }
 
 function startSession(pin, label) {
+  const res = startSessionLocked_(pin, label);
+  // הדוח מתעדכן לבד בתחילת כל שיעור, כך שהוא תמיד נכון עד השיעור הקודם.
+  // תקלה בדוח לעולם לא עוצרת את פתיחת השיעור.
+  if (res && !res.error) { try { buildReport_(); } catch (e) { console.error(e); } }
+  return res;
+}
+
+function startSessionLocked_(pin, label) {
   return adminApi_(pin, () => withLock_(() => {
     const cur = active_();
     if (cur && cur.open) throw E_('roundopen');
