@@ -89,8 +89,9 @@ function linksMenu() {
     '<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">' +
     '<p>זה הקישור למסך המרצה. שמרי אותו כסימנייה במחשב שמחובר למקרן, ואפשר גם בטלפון:</p>' +
     '<p><a href="' + admin + '" target="_blank" style="word-break:break-all">' + admin + '</a></p>' +
+    '<p style="color:#666">אם נפתחת שגיאה "לא ניתן לפתוח את הקובץ", זה בגלל כמה חשבונות גוגל מחוברים בדפדפן. פתחי את הקישור בחלון גלישה בסתר.</p>' +
     '<p style="color:#666">לסטודנטים לא צריך לשלוח קישור. הקוד שעל המסך מוביל אותם לדף הנכון.</p></div>'
-  ).setWidth(460).setHeight(230);
+  ).setWidth(460).setHeight(290);
   ui.showModalDialog(html, 'הקישור למסך המרצה');
 }
 
@@ -482,14 +483,9 @@ function parseRoster_(text) {
   const delim = lines.some(l => l.indexOf('\t') >= 0) ? '\t' : (lines[0].indexOf(';') >= 0 && lines[0].indexOf(',') < 0 ? ';' : ',');
   const rows = lines.map(l => splitLine_(l, delim).map(c => c.trim()));
   const ncol = Math.max.apply(null, rows.map(r => r.length));
+  if (ncol < 2) return parseLoose_(lines, RX_ROSTER_());
 
-  const RX = {
-    id: /ת["״׳']?ז|תעודת|זהות|מספר סטודנט|id ?number|idnumber|student ?id/i,
-    first: /שם פרטי|first ?name|given/i,
-    last: /שם משפחה|surname|last ?name|family/i,
-    full: /^שם$|שם מלא|full ?name|^name$/i,
-    email: /mail|דוא/i
-  };
+  const RX = RX_ROSTER_();
   const looksId = v => { const d = normId_(v); return d.length >= 5 && d.length <= 10 && /^[\d\s-]+$/.test(String(v)); };
   const first = rows[0];
   const hasHeader = first.some(c => Object.keys(RX).some(k => RX[k].test(c))) || !first.some(looksId);
@@ -505,7 +501,8 @@ function parseRoster_(text) {
     }
     if (bestShare >= 0.6) idCol = best;
   }
-  if (idCol < 0) throw E_('noidcol');
+  if (idCol < 0) return parseLoose_(lines, RX);
+
 
   const fullCol = find(RX.full), firstCol = find(RX.first), lastCol = find(RX.last), emailCol = find(RX.email);
   const list = [];
@@ -519,6 +516,36 @@ function parseRoster_(text) {
     else name = r.filter((c, i) => i !== idCol && i !== emailCol && c && !/@/.test(c) && !/^\d+$/.test(c)).slice(0, 2).join(' ');
     list.push({ rawId: raw, name: name.replace(/\s+/g, ' ').trim() });
   });
+  // רוב השורות לא התאימו לעמודות: כנראה רשימה שהוקלדה ביד
+  if (list.length < skipped) return parseLoose_(lines, RX);
+  return { list: list, skipped: skipped };
+}
+
+function RX_ROSTER_() {
+  return {
+    id: /ת["״׳']?ז|תעודת|זהות|מספר סטודנט|id ?number|idnumber|student ?id/i,
+    first: /שם פרטי|first ?name|given/i,
+    last: /שם משפחה|surname|last ?name|family/i,
+    full: /^שם$|שם מלא|full ?name|^name$/i,
+    email: /mail|דוא/i
+  };
+}
+
+// רשימה שהוקלדה ביד, למשל "123456789 דנה לוי": מוצאים בכל שורה את המספר, והשאר הוא השם
+function parseLoose_(lines, RX) {
+  const list = [];
+  let skipped = 0;
+  lines.forEach(l => {
+    const m = l.match(/(?:^|[^\d])(\d[\d-]{3,11}\d)(?![\d])/);
+    const digits = m ? m[1].replace(/\D/g, '') : '';
+    if (digits.length < 5 || digits.length > 10) {
+      if (!Object.keys(RX).some(k => RX[k].test(l))) skipped++;   // שורת כותרת לא נספרת כדילוג
+      return;
+    }
+    const name = l.replace(m[1], ' ').replace(/\S+@\S+/g, ' ').replace(/[\t,;|]+/g, ' ').replace(/\s+/g, ' ').trim();
+    list.push({ rawId: digits, name: name });
+  });
+  if (!list.length) throw E_('noidcol');
   return { list: list, skipped: skipped };
 }
 
