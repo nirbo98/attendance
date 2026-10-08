@@ -32,6 +32,7 @@ const CFG = {
 };
 
 const SH = {
+  START: 'מסך המרצה',
   STUDENTS: 'סטודנטים',
   SESSIONS: 'שיעורים',
   CHECKINS: 'רישומים',
@@ -49,6 +50,7 @@ const HEADERS = {
 const STATUS_OK = 'תקין';
 const STATUS_VOID = 'נפסל – בדיקת פתע';
 const FLAG_REBIND = 'החלפת מכשיר';
+const FLAG_FAR = 'רחוק מהכיתה';
 
 // ===== תפריט בגיליון =====
 function onOpen() {
@@ -94,6 +96,7 @@ function setUrlMenu() {
     return false;
   }
   props_().setProperty('WEBAPP_URL', url);
+  try { writeStartTab_(SpreadsheetApp.getActiveSpreadsheet()); } catch (e) { console.error(e); }
   return true;
 }
 
@@ -156,10 +159,34 @@ function setup_(sheetId) {
     sh.setFrozenRows(1);
     sh.setRightToLeft(true);
   });
+  writeStartTab_(ss);
   // ת"ז נשמרת כטקסט כדי לא לאבד אפסים מובילים
   ss.getSheetByName(SH.STUDENTS).getRange('A:A').setNumberFormat('@');
   ss.getSheetByName(SH.CHECKINS).getRange('D:D').setNumberFormat('@');
   ss.getSheetByName(SH.SPOT).getRange('C:C').setNumberFormat('@');
+}
+
+// לשונית ראשונה בגיליון עם קישור גדול למסך המרצה, כדי שלא יהיה צורך בסימנייה בדפדפן
+function writeStartTab_(ss) {
+  let sh = ss.getSheetByName(SH.START);
+  if (!sh) sh = ss.insertSheet(SH.START, 0);
+  try { sh.setRightToLeft(true); } catch (e) {}
+  sh.clear();
+  const url = props_().getProperty('WEBAPP_URL');
+  sh.getRange('A1').setValue('מערכת נוכחות');
+  if (url) {
+    sh.getRange('A3').setFormula('=HYPERLINK("' + url + '?admin", "לחצי כאן לפתיחת מסך המרצה")');
+    sh.getRange('A5').setValue('אם נפתח דף של גוגל עם "לא ניתן לפתוח את הקובץ": פתחי חלון גלישה בסתר והדביקי בו את הכתובת הזו:');
+    sh.getRange('A6').setValue(url + '?admin');
+  } else {
+    sh.getRange('A3').setValue('הקישור יופיע כאן אחרי ההגדרה (תפריט נוכחות, "עדכון כתובת המערכת").');
+  }
+  sh.getRange('A8').setValue('הדוח נמצא בלשונית "דוח נוכחות". את שאר הלשוניות עדיף לא לשנות.');
+  try {
+    sh.getRange('A1').setFontSize(20).setFontWeight('bold');
+    sh.getRange('A3').setFontSize(18).setFontWeight('bold');
+    sh.setColumnWidth(1, 700);
+  } catch (e) {}
 }
 
 function setPin_(pin) {
@@ -276,6 +303,8 @@ function register(req) {
 function attachLocation(req) {
   return api_(() => {
     const auth = verifyPass_(req);
+    const a = active_();
+    if (!a || a.s !== auth.s) return { ok: true };   // שיעור שכבר הסתיים: לא שומרים מיקום
     const token = cleanToken_(req.token);
     const st = token && loadStudents_().find(x => x.token === token);
     if (!st) throw E_('notfound');
@@ -357,6 +386,7 @@ function startSessionLocked_(pin, label) {
   return adminApi_(pin, () => withLock_(() => {
     const cur = active_();
     if (cur && cur.open) throw E_('roundopen');
+    scrubLocations_();
     const sh = sheet_(SH.SESSIONS);
     const existing = new Set(colValues_(sh, 1).map(String));
     const base = Utilities.formatDate(new Date(), CFG.TZ, 'yyyyMMdd-HHmm');
@@ -678,6 +708,34 @@ function farRows_(rows) {
   });
   return far;
 }
+// מזעור מידע: המיקום נחוץ רק בזמן השיעור. בפתיחת שיעור חדש, הרישומים של שיעורים קודמים
+// מקבלים סימון "רחוק מהכיתה" במידת הצורך, וקווי הרוחב והאורך נמחקים.
+function scrubLocations_() {
+  const sh = sheet_(SH.CHECKINS);
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return;
+  const vals = sh.getRange(2, 1, n, 11).getValues();
+  const rows = vals.map((v, i) => ({
+    i: i, row: i + 2, s: String(v[1]), r: Number(v[2]),
+    lat: Number(v[8]), lng: Number(v[9]), acc: Number(v[10]) || 0
+  })).filter(x => x.acc > 0);
+  if (!rows.length) return;
+  const bySession = {};
+  rows.forEach(x => { (bySession[x.s] = bySession[x.s] || []).push(x); });
+  Object.keys(bySession).forEach(k => {
+    const far = farRows_(bySession[k]);
+    bySession[k].forEach(x => {
+      if (far.has(x.row)) {
+        const f = String(vals[x.i][6] || '');
+        if (f.indexOf(FLAG_FAR) < 0) vals[x.i][6] = f ? f + ', ' + FLAG_FAR : FLAG_FAR;
+      }
+      vals[x.i][8] = ''; vals[x.i][9] = ''; vals[x.i][10] = '';
+    });
+  });
+  sh.getRange(2, 7, n, 1).setValues(vals.map(v => [v[6]]));
+  sh.getRange(2, 9, n, 3).setValues(vals.map(v => [v[8], v[9], v[10]]));
+}
+
 function median_(a) {
   a = a.slice().sort((x, y) => x - y);
   const m = Math.floor(a.length / 2);
