@@ -50,14 +50,35 @@ function getToken() { try { return localStorage.getItem(STORE); } catch (e) { re
 function saveToken(t) { try { localStorage.setItem(STORE, t); return localStorage.getItem(STORE) === t; } catch (e) { return false; } }
 function newToken() { const a = new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 // בקשה פשוטה (text/plain) כדי שהדפדפן לא ידרוש בדיקת CORS מקדימה
-async function call(action, arg) {
+// בקשה אחת לשרת. תשובה שאינה JSON (למשל עומס זמני של גוגל) נחשבת תקלה זמנית.
+async function callOnce(action, arg) {
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 25000);
+  const t = setTimeout(() => ctl.abort(), 30000);
   try {
     const res = await fetch(API, { method: 'POST', body: JSON.stringify(Object.assign({ action: action }, arg || {})), signal: ctl.signal });
-    return await res.json();
+    const text = await res.text();
+    try { return JSON.parse(text); } catch (e) { return { error: 'busy' }; }
   } finally { clearTimeout(t); }
 }
+// ניסיון חוזר אוטומטי כשהשרת עמוס, כדי שהסטודנט לא יצטרך לסרוק שוב.
+// כל הפעולות בטוחות לחזרה: רישום כפול פשוט מחזיר "כבר נרשמת".
+async function call(action, arg) {
+  const waits = [1200, 2500, 4000, 6000];
+  for (let i = 0; ; i++) {
+    let res;
+    try { res = await callOnce(action, arg); }
+    catch (e) { res = { error: 'network' }; }
+    const transient = res && (res.error === 'busy' || res.error === 'server' || res.error === 'network');
+    if (!transient || i >= waits.length) {
+      if (res && res.error === 'network') throw new Error('network');
+      return res;
+    }
+    const note = document.getElementById('busyNote');
+    if (note) note.textContent = 'יש עומס רגעי, ממשיך לנסות…';
+    await new Promise(r => setTimeout(r, waits[i] + Math.random() * 800));
+  }
+}
+
 function auth(extra) { return Object.assign({ s: BOOT.s, r: BOOT.r, issued: BOOT.issued, pass: BOOT.pass }, extra || {}); }
 
 const MSG = {
@@ -66,7 +87,7 @@ const MSG = {
   noscan: ['📷', 'רישום נוכחות', 'סרקו את הקוד שמוקרן על המסך בכיתה.'],
   notfound: ['❓', 'מספר לא מוכר', 'המספר שהוזן לא נמצא ברשימת הקורס. בדקו שהקלדתם נכון, ואם כן — פנו למרצה.'],
   alreadyother: ['⚠️', 'כבר נרשמת ממכשיר אחר', 'הת"ז הזו כבר סומנה בסבב הנוכחי ממכשיר אחר. אם זו טעות — פנו למרצה.'],
-  busy: ['⏳', 'עומס רגעי', 'נסו שוב בעוד כמה שניות.'],
+  busy: ['⏳', 'עומס רגעי', 'סרקו שוב את הקוד שעל המסך.'],
   server: ['⚠️', 'תקלה', 'משהו השתבש. סרקו שוב את הקוד.'],
   network: ['📶', 'אין חיבור', 'הבקשה לא הגיעה לשרת. בדקו את החיבור לאינטרנט וסרקו שוב.']
 };
@@ -81,7 +102,7 @@ function showError(res) {
   const m = MSG[res && res.error] || MSG.server;
   screen(m[0], m[1], m[2], 'bad');
 }
-function loading(text) { app.innerHTML = '<div class="spin"></div><p>' + esc(text) + '</p>'; }
+function loading(text) { app.innerHTML = '<div class="spin"></div><p>' + esc(text) + '</p><p class="small" id="busyNote"></p>'; }
 
 function success(res) {
   app.innerHTML =
@@ -160,23 +181,33 @@ function confirmName(name) {
 }
 
 async function start() {
+  const token = getToken();
+  myToken = /^[a-f0-9]{32}$/.test(token || '') ? token : '';
+  let first = null;
   if (API && P.get('s') && P.get('c')) {
-    loading('בודק את הקוד…');
-    try { BOOT = await call('scan', { s: P.get('s'), r: P.get('r'), c: P.get('c') }); }
+    loading('רושם נוכחות…');
+    // בקשה אחת: בדיקת הקוד ורישום מיד, אם הטלפון כבר מוכר
+    try {
+      first = await call('scanCheckIn', { s: P.get('s'), r: P.get('r'), c: P.get('c'), token: myToken });
+      // התקנה ישנה שלא מכירה את הבקשה המשולבת: שתי בקשות כמו פעם
+      if (first && first.error === 'badaction') {
+        const boot = await call('scan', { s: P.get('s'), r: P.get('r'), c: P.get('c') });
+        BOOT = boot;
+        first = { boot: boot, res: boot.state === 'ok' ? await call('checkIn', auth({ token: myToken })) : null };
+      }
+    }
     catch (e) { return showError({ error: 'network' }); }
     // הקישור כבר נוצל: מסירים אותו מהכתובת כדי שרענון לא ינסה אותו שוב
     try { history.replaceState(null, '', location.pathname); } catch (e) {}
+    if (first.error) return showError(first);
+    BOOT = first.boot || { state: 'server' };
   }
   if (BOOT.state !== 'ok') { const m = MSG[BOOT.state] || MSG.noscan; return screen(m[0], m[1], m[2], BOOT.state === 'noscan' ? '' : 'bad'); }
-  loading('רושם נוכחות…');
-  const token = getToken();
-  myToken = token || '';
-  try {
-    const res = await call('checkIn', auth({ token: myToken }));
-    if (res.error) return showError(res);
-    if (res.needRegister) return askId();
-    success(res);
-  } catch (e) { showError({ error: 'network' }); }
+  const res = first && first.res;
+  if (!res) return showError(null);
+  if (res.error) return showError(res);
+  if (res.needRegister) return askId();
+  success(res);
 }
 start();
 </script>

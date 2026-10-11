@@ -15,15 +15,16 @@
 // ===== הגדרות =====
 const CFG = {
   ROTATE_SECONDS: 10,          // כל כמה שניות הקוד על המסך מתחלף
-  ACCEPT_PREVIOUS: 1,          // כמה קודים קודמים עדיין מתקבלים (1 = חלון של 10 עד 20 שניות)
+  ACCEPT_PREVIOUS: 2,          // כמה קודים קודמים עדיין מתקבלים (2 = חלון של 20 עד 30 שניות, מרווח לעומס)
   PASS_TTL_SECONDS: 180,       // כמה זמן יש לסטודנט להשלים רישום אחרי סריקה תקינה
-  ROUND_MINUTES: 3,            // סבב נסגר לבד אחרי כמה דקות
+  ROUND_MINUTES: 5,            // סבב נסגר לבד אחרי כמה דקות
   SPOT_CHECK_SIZE: 10,         // כמה שמות בכל בדיקת פתע
   ATTENDANCE_THRESHOLD: 0.8,   // מתחת לסף הזה הסטודנט מסומן באדום בדוח
   FAR_METERS: 1000,            // מרחק מהכיתה שממנו רישום מסומן כחשוד
   GEO_GOOD_ACCURACY: 250,      // רק מדידות מדויקות מזה משמשות לחישוב מיקום הכיתה
   GEO_MIN_POINTS: 8,           // מינימום מדידות טובות בסבב כדי לחשב מיקום כיתה
   CACHE_TTL: 21600,            // 6 שעות
+  ROSTER_TTL: 300,             // הרשימה נשמרת במטמון 5 דקות, כדי לא לקרוא את הגיליון בכל סריקה
   MIN_PIN_LENGTH: 8,
   TZ: 'Asia/Jerusalem',
   // דף הסטודנטים החיצוני (GitHub Pages). אין בו נתונים או סודות, הוא רק שולח בקשות לשרת הזה.
@@ -217,6 +218,7 @@ function page_(file, boot, title) {
 // רק פעולות סטודנט. פעולות מרצה זמינות רק ממסך המרצה, עם קוד מנהל.
 const STUDENT_API = {
   scan: req => validateScan_(String(req.s || ''), Number(req.r), String(req.c || '')),
+  scanCheckIn: scanCheckIn,
   checkIn: checkIn,
   lookupId: lookupId,
   register: register,
@@ -262,6 +264,19 @@ function checkIn(req) {
   });
 }
 
+// בקשה אחת במקום שתיים: בודקת את הקוד מהמקרן ורושמת מיד סטודנט שהטלפון שלו כבר מוכר.
+// חוסך חצי מהעומס על השרת ברגע שכל הכיתה סורקת יחד.
+function scanCheckIn(req) {
+  return api_(() => {
+    const boot = validateScan_(String(req.s || ''), Number(req.r), String(req.c || ''));
+    if (boot.state !== 'ok') return { boot: boot };
+    const token = cleanToken_(req.token);
+    const st = token && loadStudents_().find(x => x.token === token);
+    if (!st) return { boot: boot, res: { needRegister: true } };
+    return { boot: boot, res: withLock_(() => record_(st, boot.s, boot.r, [])) };
+  });
+}
+
 function lookupId(req) {
   return api_(() => {
     verifyPass_(req);
@@ -281,7 +296,7 @@ function register(req) {
     const id = normId_(req.id);
     if (!id) throw E_('badid');
     return withLock_(() => {
-      const all = loadStudents_();
+      const all = loadStudents_(true);
       const st = all.find(x => x.id === id);
       if (!st) throw E_('notfound');
       const owner = all.find(x => x.token === token);
@@ -293,6 +308,7 @@ function register(req) {
       if (st.token) flags.push(FLAG_REBIND);
       const rebinds = st.token ? st.rebinds + 1 : st.rebinds;
       sheet_(SH.STUDENTS).getRange(st.row, 3, 1, 3).setValues([[token, new Date(), rebinds]]);
+      dropRosterCache_();
       st.token = token;
       return record_(st, auth.s, auth.r, flags);
     });
@@ -359,7 +375,7 @@ function record_(st, s, r, flags) {
 // ===== פעולות המרצה =====
 function adminLogin(pin) {
   return adminApi_(pin, () => {
-    const st = loadStudents_();
+    const st = loadStudents_(true);
     return {
       active: active_(),
       rosterSize: st.length,
@@ -504,9 +520,10 @@ function markSpot(pin, id, present) {
 function resetDevice(pin, id) {
   return adminApi_(pin, () => withLock_(() => {
     id = normId_(id);
-    const st = loadStudents_().find(x => x.id === id);
+    const st = loadStudents_(true).find(x => x.id === id);
     if (!st) throw E_('notfound');
     sheet_(SH.STUDENTS).getRange(st.row, 3).setValue('');
+    dropRosterCache_();
     return { name: st.name };
   }));
 }
@@ -520,7 +537,8 @@ function importRoster(pin, text) {
   return adminApi_(pin, () => withLock_(() => {
     const parsed = parseRoster_(String(text || ''));
     const existing = {};
-    loadStudents_().forEach(s => { existing[s.id] = s; });
+    loadStudents_(true).forEach(s => { existing[s.id] = s; });
+    dropRosterCache_();
     const sh = sheet_(SH.STUDENTS);
     const seen = {};
     const add = [];
@@ -537,6 +555,7 @@ function importRoster(pin, text) {
       }
     });
     if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, 2).setValues(add);
+    dropRosterCache_();
     return { added: add.length, updated: updated, skipped: parsed.skipped, total: Object.keys(existing).length + add.length };
   }));
 }
@@ -659,7 +678,7 @@ function cellFor_(d, se, id) {
 }
 
 function buildReport_() {
-  const students = loadStudents_();
+  const students = loadStudents_(true);
   const d = attendanceData_();
   const dateStr = x => (x instanceof Date) ? Utilities.formatDate(x, CFG.TZ, 'dd/MM') : String(x);
   const header = ['ת"ז', 'שם'].concat(d.sessions.map(x => dateStr(x.date) + (x.label ? ' ' + x.label : '')), ['נוכחויות', 'אחוז']);
@@ -855,7 +874,21 @@ function colValues_(sh, col) {
   return n < 1 ? [] : sh.getRange(2, col, n, 1).getValues().map(v => v[0]);
 }
 
-function loadStudents_() {
+// הרשימה נקראת מהמטמון בסריקות רגילות. כל שינוי ברשימה מוחק את המטמון.
+// fresh = קריאה ישירה מהגיליון, לפעולות שמשנות את הרשימה.
+function loadStudents_(fresh) {
+  const c = cache_();
+  if (!fresh) {
+    const hit = c.get('roster');
+    if (hit) { try { return JSON.parse(hit); } catch (e) {} }
+  }
+  const list = readStudents_();
+  try { c.put('roster', JSON.stringify(list), CFG.ROSTER_TTL); } catch (e) {}
+  return list;
+}
+function dropRosterCache_() { try { cache_().remove('roster'); } catch (e) {} }
+
+function readStudents_() {
   return rows_(sheet_(SH.STUDENTS), 5).map((v, i) => ({
     row: i + 2,
     id: normId_(v[0]),
