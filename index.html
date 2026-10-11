@@ -112,8 +112,7 @@ function success(res) {
     '<p>סבב ' + esc(res.r) + (BOOT.label ? ' · ' + esc(BOOT.label) : '') + '</p>' +
     '<div class="clock" id="clk"></div><p><span class="pulse"></span>אישור חי</p>' +
     (storageOk ? '' : '<div class="warn">הדפדפן לא שומר נתונים (אולי גלישה בסתר). בפעם הבאה פתחו בדפדפן רגיל, אחרת הרישום שלכם יסומן לבדיקה.</div>') +
-    '<button class="ghost" id="mine">כמה נוכחויות יש לי?</button><p id="mineOut"></p>' +
-    (res.row ? '<p class="small">אם הדפדפן מבקש מיקום: הוא משמש רק לבדיקה שהרישום נעשה מהכיתה, ולא נשמר מעבר לזה.</p>' : '');
+    '<button class="ghost" id="mine">כמה נוכחויות יש לי?</button><p id="mineOut"></p>';
   const tick = () => { const el = document.getElementById('clk'); if (el) el.textContent = new Date().toLocaleTimeString('he-IL', { hour12: false }); };
   tick(); setInterval(tick, 1000);
   document.getElementById('mine').onclick = async function () {
@@ -124,17 +123,6 @@ function success(res) {
       out.textContent = m.error ? 'אי אפשר לבדוק כרגע. סרקו שוב בשיעור הבא.' : 'נוכחות מלאה ב-' + m.full + ' מתוך ' + m.total + ' שיעורים עד עכשיו.';
     } catch (e) { out.textContent = 'אי אפשר לבדוק כרגע.'; }
   };
-  if (res.row) sendLocation(res.row);
-}
-
-// לא חוסם את הרישום: אם אין מיקום, אין מיקום
-function sendLocation(row) {
-  if (!navigator.geolocation) return;
-  try {
-    navigator.geolocation.getCurrentPosition(p => {
-      call('attachLocation', auth({ token: myToken, row: row, lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy })).catch(() => {});
-    }, () => {}, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
-  } catch (e) {}
 }
 
 function askId() {

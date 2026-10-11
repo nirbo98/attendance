@@ -58,7 +58,7 @@
 
 <div id="names" class="overlay">
   <button class="ghost exit" onclick="overlayOff()">יציאה (Esc)</button>
-  <div class="top" style="font-size:4.5vh;color:var(--ink);font-weight:700">מי ששמו מופיע — הרימו יד</div>
+  <div class="top"></div>
   <div id="namesList"></div>
 </div>
 
@@ -145,13 +145,11 @@ function dashboard() {
       (needRoster ? '<div class="card hl" id="importCard"></div>' : '') +
       '<div class="card" id="sessCard"></div>' +
       '<div class="card" id="liveCard"></div>' +
-      '<div class="card" id="spotCard"></div>' +
       '<div class="card" id="toolsCard"></div>' +
     '</div>';
   if (needRoster) renderImport('importCard', true);
   renderSession();
   renderLive();
-  renderSpot();
   renderTools();
   if (S.active && S.active.open) startCode(); else stopCode();
   clearInterval(statsTimer);
@@ -166,7 +164,6 @@ async function refreshState() {
 function renderSession() {
   const a = S.active, el = document.getElementById('sessCard');
   clearInterval(countdownTimer);
-  const sp = document.getElementById('sp'); if (sp) sp.disabled = !a;
   if (!a) {
     el.innerHTML =
       '<h2>שיעור</h2><p class="mute">אין שיעור פעיל היום.</p>' +
@@ -178,7 +175,7 @@ function renderSession() {
   if (a.open) {
     el.innerHTML =
       '<h2>' + esc(a.label || 'שיעור היום') + '</h2>' +
-      '<p><span class="pill open">סבב ' + a.r + ' פתוח</span> <span class="mute">נסגר לבד בעוד <b id="cd"></b></span></p>' +
+      '<p><span class="pill open">הרישום פתוח</span> <span class="mute">נסגר לבד בעוד <b id="cd"></b></span></p>' +
       '<div class="row"><button id="proj1">הקרנת הקוד</button><button class="ghost" id="cl">סגירה עכשיו</button></div>' +
       '<div id="qrSmall" style="margin-top:12px"></div><p class="mute" id="qrDest" style="text-align:center"></p><div class="msg" id="sessMsg"></div>';
     document.getElementById('proj1').onclick = projOn;
@@ -191,10 +188,10 @@ function renderSession() {
   }
   el.innerHTML =
     '<h2>' + esc(a.label || 'שיעור היום') + '</h2>' +
-    '<p><span class="pill">' + (a.r ? a.r + ' סבבים הושלמו' : 'טרם נפתח סבב') + '</span></p>' +
-    '<div class="row"><button id="op">' + (a.r ? 'פתיחת סבב בדיקה ' + (a.r + 1) : 'פתיחת סבב 1') + '</button>' +
+    '<p><span class="pill">' + (a.r ? 'הרישום נסגר' : 'הרישום עוד לא נפתח') + '</span></p>' +
+    '<div class="row"><button id="op">' + (a.r ? 'פתיחה מחדש (למאחרים)' : 'פתיחת רישום') + '</button>' +
     '<button class="ghost" id="nw">שיעור חדש</button></div>' +
-    '<p class="mute" style="margin-top:10px">סבב נסגר לבד אחרי ' + S.roundMinutes + ' דקות. את סבב הבדיקה כדאי לפתוח בזמן אקראי באמצע השיעור, בלי הודעה מראש.</p>' +
+    '<p class="mute" style="margin-top:10px">הרישום נסגר לבד אחרי ' + S.roundMinutes + ' דקות. מי שכבר נרשם לא צריך לסרוק שוב.</p>' +
     '<div class="msg" id="sessMsg"></div>';
   document.getElementById('op').onclick = act(() => call('openRound'), true);
   document.getElementById('nw').onclick = () => { if (confirm('לפתוח שיעור חדש? השיעור הנוכחי יישמר כמו שהוא.')) act(() => call('startSession', ''))(); };
@@ -221,58 +218,12 @@ function renderLive(st) {
     return;
   }
   const rounds = (st && st.rounds) || [];
-  const last = rounds.length ? rounds[rounds.length - 1].count : 0;
-  el.innerHTML =
-    '<h2>נוכחות חיה</h2>' +
-    '<div class="stat" id="liveNum">' + last + '</div><p class="mute">נרשמו בסבב האחרון, מתוך ' + S.rosterSize + ' בקורס</p>' +
-    rounds.map(x => '<div class="row" style="justify-content:space-between"><span>סבב ' + x.r + '</span><b>' + x.count + '</b></div>').join('') +
-    (st && (st.rebind || st.far) ? '<p style="margin-top:10px">' +
-      (st.far ? '<span class="pill flag">' + st.far + ' נרשמו רחוק מהכיתה</span> ' : '') +
-      (st.rebind ? '<span class="pill flag">' + st.rebind + ' החליפו טלפון</span>' : '') +
-      '</p><p class="mute">הם יופיעו ראשונים בבדיקת הפתע.</p>' : '');
+  const n = rounds.length ? rounds[rounds.length - 1].count : 0;
+  el.innerHTML = '<h2>נוכחות היום</h2><div class="stat" id="liveNum">' + n + '</div><p class="mute">נרשמו, מתוך ' + S.rosterSize + ' בקורס</p>';
 }
 async function refreshStats() {
   if (!S.active) return renderLive();
   try { renderLive(await call('getStats')); } catch (e) {}
-}
-
-// ===== בדיקת פתע =====
-function renderSpot(msg) {
-  const el = document.getElementById('spotCard');
-  el.innerHTML =
-    '<h2>בדיקת פתע</h2>' +
-    '<p class="mute">' + S.spotSize + ' שמות מבין מי שנרשם היום, מסומנים קודם. מקרינים את השמות, ומי ששמו מופיע מרים יד. מי שלא נמצא מאבד את הנוכחות של השיעור הזה בלבד.</p>' +
-    '<div class="row"><button id="sp"' + (S.active ? '' : ' disabled') + '>שליפת שמות</button>' +
-    '<button class="ghost" id="spShow" style="display:none">הקרנת השמות</button></div>' +
-    '<div id="spotList" style="margin-top:10px"></div><div class="msg">' + esc(msg || '') + '</div>' +
-    '<p class="mute" id="spTip" style="display:none">טיפ: אפשר לסמן מהטלפון (אותו קישור ואותו קוד) בזמן שהשמות מוקרנים מהמחשב.</p>';
-  document.getElementById('spShow').onclick = namesOn;
-  document.getElementById('sp').onclick = async () => {
-    try {
-      spotList = await call('spotCheck');
-      if (!spotList.length) return renderSpot('אין עוד שמות לבדיקה בשיעור הזה.');
-      document.getElementById('spShow').style.display = '';
-      document.getElementById('spTip').style.display = '';
-      const box = document.getElementById('spotList');
-      box.innerHTML = spotList.map(x =>
-        '<div class="spot" data-id="' + esc(x.id) + '"><div><span class="nm">' + esc(x.name) + '</span> ' +
-        (x.flagged ? '<span class="pill flag">מסומן</span>' : '') + '</div>' +
-        '<div class="row"><button class="okb" data-p="1">נמצא</button><button class="badb" data-p="0">לא נמצא</button></div></div>').join('');
-      box.querySelectorAll('button').forEach(b => b.onclick = async () => {
-        const row = b.closest('.spot');
-        row.querySelectorAll('button').forEach(x => x.disabled = true);
-        try {
-          await call('markSpot', row.dataset.id, b.dataset.p === '1');
-          row.querySelector('.row').innerHTML = b.dataset.p === '1' ? '<span class="pill open">נמצא</span>' : '<span class="pill" style="background:#fbe9e7;color:var(--bad)">נפסל</span>';
-        } catch (e) { row.querySelectorAll('button').forEach(x => x.disabled = false); alert(errText(e)); }
-      });
-    } catch (e) { renderSpot(errText(e)); }
-  };
-}
-function namesOn() {
-  document.getElementById('namesList').innerHTML = spotList.map(x => '<div>' + esc(x.name) + '</div>').join('');
-  document.getElementById('names').classList.add('on');
-  fullscreen(true);
 }
 
 // ===== כלים =====
@@ -345,7 +296,7 @@ async function tickCode() {
     if (document.getElementById('proj').classList.contains('on')) {
       const size = Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.66);
       drawQR('qrBig', size, r.url, 'big');
-      document.getElementById('projTop').textContent = 'סרקו לרישום נוכחות · סבב ' + r.r + ' · נסגר בעוד ' + mmss(r.roundMsLeft);
+      document.getElementById('projTop').textContent = 'סרקו לרישום נוכחות · נסגר בעוד ' + mmss(r.roundMsLeft);
       document.getElementById('projCnt').textContent = 'נרשמו: ' + r.count;
       animateBar(r.msLeft);
     }

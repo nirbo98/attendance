@@ -17,7 +17,8 @@ const CFG = {
   ROTATE_SECONDS: 10,          // כל כמה שניות הקוד על המסך מתחלף
   ACCEPT_PREVIOUS: 2,          // כמה קודים קודמים עדיין מתקבלים (2 = חלון של 20 עד 30 שניות, מרווח לעומס)
   PASS_TTL_SECONDS: 180,       // כמה זמן יש לסטודנט להשלים רישום אחרי סריקה תקינה
-  ROUND_MINUTES: 5,            // סבב נסגר לבד אחרי כמה דקות
+  ROUND_MINUTES: 5,            // הרישום נסגר לבד אחרי כמה דקות
+  SINGLE_ROUND: true,          // רישום אחד לשיעור. "פתיחה מחדש" ממשיכה את אותו רישום (למאחרים)
   SPOT_CHECK_SIZE: 10,         // כמה שמות בכל בדיקת פתע
   ATTENDANCE_THRESHOLD: 0.8,   // מתחת לסף הזה הסטודנט מסומן באדום בדוח
   FAR_METERS: 1000,            // מרחק מהכיתה שממנו רישום מסומן כחשוד
@@ -460,7 +461,7 @@ function openRound(pin) {
     const a = active_();
     if (!a) throw E_('nosession');
     if (a.open) return a;
-    a.r += 1;
+    if (!(CFG.SINGLE_ROUND && a.r >= 1)) a.r += 1;
     a.open = true;
     a.openedAt = Date.now();
     setActive_(a);
