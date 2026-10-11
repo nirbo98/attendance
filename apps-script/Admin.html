@@ -63,6 +63,7 @@
 </div>
 
 <script>
+const BOOT = <?!= boot ?>;
 let PIN = '';
 let S = null;
 let qrSmall = null, qrBig = null, codeTimer = null, statsTimer = null, countdownTimer = null;
@@ -79,10 +80,36 @@ const ERR = {
   badpin: 'קוד שגוי.', nosession: 'אין שיעור פעיל.', roundopen: 'יש סבב פתוח. חכי שייסגר או סגרי אותו.',
   notfound: 'הת"ז לא נמצאה.', busy: 'עומס רגעי, נסי שוב.', nosetup: 'לא בוצעה הגדרה ראשונית בגיליון.',
   noidcol: 'לא מצאתי עמודה של ת"ז ברשימה שהודבקה.',
+  shortpin: 'הקוד חייב להכיל לפחות 8 תווים.', haspin: 'כבר נקבע קוד כניסה. היכנסי איתו.',
   nourl: 'חסרה כתובת המערכת. בגיליון: תפריט נוכחות, "עדכון כתובת המערכת".', empty: 'לא הודבק כלום.', server: 'תקלה בשרת.'
 };
 function errText(e) { return (e && ERR[e.error]) || 'תקלה.'; }
 function mmss(ms) { ms = Math.max(0, ms); const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+
+// ===== הגדרה ראשונה: בחירת קוד כניסה =====
+function firstPinView(msg) {
+  root.innerHTML =
+    '<div class="card login"><h1>ברוכה הבאה!</h1>' +
+    '<p>המערכת הותקנה. נשאר רק לבחור קוד כניסה למסך המרצה: לפחות 8 תווים, אותיות ומספרים, שלא קשור אלייך.</p>' +
+    '<div class="row" style="margin-top:10px"><input id="p1" type="password" placeholder="קוד כניסה" autocomplete="new-password"></div>' +
+    '<div class="row" style="margin-top:8px"><input id="p2" type="password" placeholder="שוב, לאימות" autocomplete="new-password"></div>' +
+    '<div class="row" style="margin-top:10px"><button id="sv">שמירה וכניסה</button></div>' +
+    '<div class="msg" style="color:var(--bad)">' + esc(msg || '') + '</div></div>';
+  document.getElementById('p1').focus();
+  document.getElementById('sv').onclick = () => {
+    const a = document.getElementById('p1').value, b = document.getElementById('p2').value;
+    if (a !== b) return firstPinView('שני הקודים לא זהים.');
+    if (a.trim().length < 8) return firstPinView(ERR.shortpin);
+    document.getElementById('sv').disabled = true;
+    google.script.run.withSuccessHandler(async r => {
+      if (r && r.error === 'haspin') return loginView(ERR.haspin);
+      if (r && r.error) return firstPinView(errText(r));
+      PIN = a.trim();
+      try { sessionStorage.setItem('att_pin', PIN); } catch (e) {}
+      try { S = await call('adminLogin'); dashboard(); } catch (e) { loginView(errText(e)); }
+    }).withFailureHandler(() => firstPinView(ERR.server)).setInitialPin(a);
+  };
+}
 
 // ===== כניסה =====
 function loginView(msg) {
@@ -359,6 +386,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') overlayOff()
 (async () => {
   let saved = '';
   try { saved = sessionStorage.getItem('att_pin') || ''; } catch (e) {}
+  if (BOOT && BOOT.needPin) return firstPinView();
   if (!saved) return loginView();
   PIN = saved;
   try { S = await call('adminLogin'); dashboard(); } catch (e) { loginView(); }

@@ -190,6 +190,41 @@ function writeStartTab_(ss) {
   } catch (e) {}
 }
 
+// הגדרה אוטומטית, בלי תפריטים: בפעם הראשונה שהמערכת נפתחת אחרי פריסה היא יוצרת את הלשוניות,
+// מזהה עותק חדש (ומאפסת את ההגדרות שהגיעו מהמקור), ושומרת לבד את הכתובת הציבורית שלה.
+function ensureSetup_() {
+  const P = props_();
+  let ss = null;
+  try { ss = SpreadsheetApp.getActiveSpreadsheet(); } catch (e) {}
+  if (ss && P.getProperty('SHEET_ID') !== ss.getId()) {
+    withLock_(() => {
+      if (P.getProperty('SHEET_ID') === ss.getId()) return;
+      ['SECRET', 'ADMIN_PIN_HASH', 'ACTIVE', 'WEBAPP_URL', 'FRONTEND'].forEach(k => P.deleteProperty(k));
+      setup_(ss.getId());
+    });
+  }
+  if (!P.getProperty('WEBAPP_URL') && P.getProperty('SHEET_ID')) {
+    const u = String(ScriptApp.getService().getUrl() || '');
+    if (WEBAPP_RX.test(u)) {
+      P.setProperty('WEBAPP_URL', u);
+      try { writeStartTab_(ss_()); } catch (e) { console.error(e); }
+    }
+  }
+}
+
+// קוד כניסה ראשון, נקבע במסך המרצה. אפשרי רק כשעוד אין קוד.
+function setInitialPin(pin) {
+  return api_(() => {
+    ensureSetup_();
+    return withLock_(() => {
+      if (props_().getProperty('ADMIN_PIN_HASH')) throw E_('haspin');
+      if (!props_().getProperty('SECRET')) throw E_('nosetup');
+      setPin_(pin);
+      return { ok: true };
+    });
+  });
+}
+
 function setPin_(pin) {
   pin = String(pin || '').trim();
   if (pin.length < CFG.MIN_PIN_LENGTH) throw E_('shortpin');
@@ -199,7 +234,10 @@ function setPin_(pin) {
 // ===== כניסה לאתר =====
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (p.admin !== undefined) return page_('Admin', {}, 'ניהול נוכחות');
+  try { ensureSetup_(); } catch (err) { console.error(err); }
+  const needPin = !props_().getProperty('ADMIN_PIN_HASH');
+  // מערכת חדשה: הקישור מחלון הפריסה פותח ישר את מסך ההגדרה (בחירת קוד כניסה)
+  if (p.admin !== undefined || (needPin && !p.s)) return page_('Admin', { needPin: needPin }, 'ניהול נוכחות');
   let boot;
   if (p.s && p.r && p.c) boot = validateScan_(String(p.s), Number(p.r), String(p.c));
   else boot = { state: 'noscan' };
@@ -374,6 +412,7 @@ function record_(st, s, r, flags) {
 
 // ===== פעולות המרצה =====
 function adminLogin(pin) {
+  try { ensureSetup_(); } catch (e) { console.error(e); }
   return adminApi_(pin, () => {
     const st = loadStudents_(true);
     return {
