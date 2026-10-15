@@ -62,9 +62,14 @@ async function callOnce(action, arg) {
 }
 // ניסיון חוזר אוטומטי כשהשרת עמוס, כדי שהסטודנט לא יצטרך לסרוק שוב.
 // כל הפעולות בטוחות לחזרה: רישום כפול פשוט מחזיר "כבר נרשמת".
+// ניסיונות חוזרים מרווחים ומפוזרים אקראית, כדי שכל הכיתה לא תחזור לשרת באותה שנייה.
+// קצר (כדקה): הבקשה הראשונה, שנושאת את הקוד מהמסך, שתקף כדקה.
+// ארוך (כ-3.5 דקות): אחרי שהקוד אושר, כשהאישור תקף 5 דקות.
+const WAITS_SHORT = [700, 1400, 2400, 3500, 5000, 6500, 8000, 10000, 12000];
+const WAITS_LONG = WAITS_SHORT.concat([15000, 15000, 20000, 20000, 25000, 25000, 30000]);
 async function call(action, arg) {
-  // עד כדקה של ניסיונות, מרווחים ומפוזרים אקראית כדי שכל הכיתה לא תחזור לשרת באותה שנייה
-  const waits = [700, 1400, 2400, 3500, 5000, 6500, 8000, 10000, 12000];
+  const waits = action === 'scanCheckIn' || action === 'scan' ? WAITS_SHORT : WAITS_LONG;
+  const started = Date.now();
   for (let i = 0; ; i++) {
     let res;
     try { res = await callOnce(action, arg); }
@@ -75,7 +80,9 @@ async function call(action, arg) {
       return res;
     }
     const note = document.getElementById('busyNote');
-    if (note) note.textContent = 'הרבה סטודנטים נרשמים עכשיו. ממשיך לנסות, אין צורך לסרוק שוב.';
+    if (note) note.textContent = Date.now() - started > 30000
+      ? 'עדיין מנסה. אפשר להשאיר את הטלפון פתוח על המסך הזה, אין צורך לסרוק שוב.'
+      : 'הרבה סטודנטים נרשמים עכשיו. ממשיך לנסות, אין צורך לסרוק שוב.';
     await new Promise(r => setTimeout(r, waits[i] * (0.7 + Math.random() * 0.6)));
   }
 }
