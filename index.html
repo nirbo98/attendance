@@ -63,7 +63,8 @@ async function callOnce(action, arg) {
 // ניסיון חוזר אוטומטי כשהשרת עמוס, כדי שהסטודנט לא יצטרך לסרוק שוב.
 // כל הפעולות בטוחות לחזרה: רישום כפול פשוט מחזיר "כבר נרשמת".
 async function call(action, arg) {
-  const waits = [1200, 2500, 4000, 6000];
+  // עד כחצי דקה של ניסיונות, מרווחים ומפוזרים אקראית כדי שכל הכיתה לא תחזור לשרת באותה שנייה
+  const waits = [700, 1400, 2400, 3500, 5000, 6500, 8000];
   for (let i = 0; ; i++) {
     let res;
     try { res = await callOnce(action, arg); }
@@ -74,8 +75,8 @@ async function call(action, arg) {
       return res;
     }
     const note = document.getElementById('busyNote');
-    if (note) note.textContent = 'יש עומס רגעי, ממשיך לנסות…';
-    await new Promise(r => setTimeout(r, waits[i] + Math.random() * 800));
+    if (note) note.textContent = 'הרבה סטודנטים נרשמים עכשיו. ממשיך לנסות, אין צורך לסרוק שוב.';
+    await new Promise(r => setTimeout(r, waits[i] * (0.7 + Math.random() * 0.6)));
   }
 }
 

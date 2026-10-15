@@ -15,7 +15,8 @@
 // ===== הגדרות =====
 const CFG = {
   ROTATE_SECONDS: 10,          // כל כמה שניות הקוד על המסך מתחלף
-  ACCEPT_PREVIOUS: 2,          // כמה קודים קודמים עדיין מתקבלים (2 = חלון של 20 עד 30 שניות, מרווח לעומס)
+  ACCEPT_PREVIOUS: 4,          // כמה קודים קודמים עדיין מתקבלים (4 = חלון של 40 עד 50 שניות, מרווח לעומס)
+  LOCK_WAIT_MS: 8000,          // בקשה שלא קיבלה תור תוך 8 שניות חוזרת לטלפון, שמנסה שוב מאוחר יותר
   PASS_TTL_SECONDS: 180,       // כמה זמן יש לסטודנט להשלים רישום אחרי סריקה תקינה
   ROUND_MINUTES: 5,            // הרישום נסגר לבד אחרי כמה דקות
   SINGLE_ROUND: true,          // רישום אחד לשיעור. "פתיחה מחדש" ממשיכה את אותו רישום (למאחרים)
@@ -299,7 +300,7 @@ function checkIn(req) {
     if (!token) return { needRegister: true };
     const st = loadStudents_().find(x => x.token === token);
     if (!st) return { needRegister: true };
-    return withLock_(() => record_(st, auth.s, auth.r, []));
+    return finish_(withLock_(() => record_(st, auth.s, auth.r, [])));
   });
 }
 
@@ -312,7 +313,7 @@ function scanCheckIn(req) {
     const token = cleanToken_(req.token);
     const st = token && loadStudents_().find(x => x.token === token);
     if (!st) return { boot: boot, res: { needRegister: true } };
-    return { boot: boot, res: withLock_(() => record_(st, boot.s, boot.r, [])) };
+    return { boot: boot, res: finish_(withLock_(() => record_(st, boot.s, boot.r, []))) };
   });
 }
 
@@ -334,8 +335,9 @@ function register(req) {
     if (!token) throw E_('badtoken');
     const id = normId_(req.id);
     if (!id) throw E_('badid');
-    return withLock_(() => {
-      const all = loadStudents_(true);
+    // בתוך הנעילה עובדים מול הרשימה שבזיכרון (מהיר). הכתיבה לגיליון קורית אחרי השחרור.
+    return finish_(withLock_(() => {
+      const all = loadStudents_();
       const st = all.find(x => x.id === id);
       if (!st) throw E_('notfound');
       const owner = all.find(x => x.token === token);
@@ -346,11 +348,13 @@ function register(req) {
       const flags = [];
       if (st.token) flags.push(FLAG_REBIND);
       const rebinds = st.token ? st.rebinds + 1 : st.rebinds;
-      sheet_(SH.STUDENTS).getRange(st.row, 3, 1, 3).setValues([[token, new Date(), rebinds]]);
-      dropRosterCache_();
       st.token = token;
-      return record_(st, auth.s, auth.r, flags);
-    });
+      st.rebinds = rebinds;
+      saveRosterCache_(all);
+      const res = record_(st, auth.s, auth.r, flags);
+      res._w2 = { row: st.row, id: st.id, vals: [token, new Date(), rebinds] };
+      return res;
+    }));
   });
 }
 
@@ -391,6 +395,8 @@ function myAttendance(req) {
   });
 }
 
+// רושם נוכחות. רץ בתוך הנעילה, ולכן עושה רק פעולות זיכרון מהירות:
+// בודק כפילות, שומר מקום לשורה, ומחזיר את השורה לכתיבה אחרי שהנעילה משתחררת (finish_).
 function record_(st, s, r, flags) {
   const c = cache_();
   const key = ['ck', s, r, st.id].join('|');
@@ -399,16 +405,61 @@ function record_(st, s, r, flags) {
     c.put(key, '1', CFG.CACHE_TTL);
     return { ok: true, already: true, name: st.name, r: r };
   }
-  // המונים נקראים לפני ההוספה, כדי שחישוב מהגיליון (כשהמטמון ריק) לא יספור את השורה החדשה פעמיים
+  const cntKey = ['cnt', s, r].join('|');
   const cnt = count_(s, r);
   const fl = flags.length ? flagCount_(s) : 0;
-  const sh = sheet_(SH.CHECKINS);
-  sh.appendRow([new Date(), s, r, st.id, st.name, st.token.slice(0, 8), flags.join(', '), STATUS_OK, '', '', '']);
-  const row = sh.getLastRow();
+  const row = reserveRow_();
   c.put(key, '1', CFG.CACHE_TTL);
-  c.put(['cnt', s, r].join('|'), String(cnt + 1), CFG.CACHE_TTL);
+  c.put(cntKey, String(cnt + 1), CFG.CACHE_TTL);
   if (flags.length) c.put('fl|' + s, String(fl + 1), CFG.CACHE_TTL);
-  return { ok: true, name: st.name, r: r, row: row, flagged: flags.length > 0 };
+  return {
+    ok: true, name: st.name, r: r, row: row, flagged: flags.length > 0,
+    _w: { row: row, key: key, cntKey: cntKey,
+          vals: [new Date(), s, r, st.id, st.name, st.token.slice(0, 8), flags.join(', '), STATUS_OK, '', '', ''] }
+  };
+}
+
+// מספר השורה הבאה בלשונית "רישומים". נשמר בהגדרות ומתאפס בכל פתיחת רישום,
+// כך שכל רישום מקבל שורה משלו ואפשר לכתוב במקביל בלי לדרוס.
+function reserveRow_() {
+  const P = props_();
+  let n = Number(P.getProperty('NEXT_ROW')) || 0;
+  if (!n) n = sheet_(SH.CHECKINS).getLastRow() + 1;
+  P.setProperty('NEXT_ROW', String(n + 1));
+  return n;
+}
+
+// הכתיבה לגיליון, מחוץ לנעילה. אם היא נכשלת, מבטלים את הסימון כדי שהניסיון החוזר של הטלפון יירשם מחדש.
+function finish_(res) {
+  if (!res) return res;
+  const w = res._w, w2 = res._w2;
+  delete res._w; delete res._w2;
+  try {
+    if (w2) {
+      // ביטחון: אם מישהו מחק או הזיז שורות ברשימה מאז שנטענה, מוצאים את השורה הנכונה לפי הת"ז
+      const sh = sheet_(SH.STUDENTS);
+      let row = w2.row;
+      if (normId_(sh.getRange(row, 1).getValues()[0][0]) !== w2.id) {
+        const ids = colValues_(sh, 1).map(normId_);
+        const i = ids.indexOf(w2.id);
+        row = i >= 0 ? i + 2 : 0;
+        dropRosterCache_();
+      }
+      if (row) sh.getRange(row, 3, 1, 3).setValues([w2.vals]);
+    }
+    if (w) sheet_(SH.CHECKINS).getRange(w.row, 1, 1, 11).setValues([w.vals]);
+  } catch (e) {
+    console.error(e);
+    if (w) {
+      try {
+        cache_().remove(w.key);
+        const n = Number(cache_().get(w.cntKey));
+        if (n > 0) cache_().put(w.cntKey, String(n - 1), CFG.CACHE_TTL);
+      } catch (e2) {}
+    }
+    throw E_('busy');
+  }
+  return res;
 }
 
 // ===== פעולות המרצה =====
@@ -443,6 +494,7 @@ function startSessionLocked_(pin, label) {
     const cur = active_();
     if (cur && cur.open) throw E_('roundopen');
     scrubLocations_();
+    props_().deleteProperty('NEXT_ROW');
     const sh = sheet_(SH.SESSIONS);
     const existing = new Set(colValues_(sh, 1).map(String));
     const base = Utilities.formatDate(new Date(), CFG.TZ, 'yyyyMMdd-HHmm');
@@ -464,6 +516,7 @@ function openRound(pin) {
     if (!(CFG.SINGLE_ROUND && a.r >= 1)) a.r += 1;
     a.open = true;
     a.openedAt = Date.now();
+    props_().deleteProperty('NEXT_ROW');
     setActive_(a);
     setSessionRounds_(a.s, a.r);
     return a;
@@ -927,6 +980,10 @@ function loadStudents_(fresh) {
   return list;
 }
 function dropRosterCache_() { try { cache_().remove('roster'); } catch (e) {} }
+function saveRosterCache_(list) {
+  try { cache_().put('roster', JSON.stringify(list), CFG.ROSTER_TTL); }
+  catch (e) { dropRosterCache_(); }
+}
 
 function readStudents_() {
   return rows_(sheet_(SH.STUDENTS), 5).map((v, i) => ({
@@ -1001,7 +1058,7 @@ function shuffle_(a) {
 
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(25000)) throw E_('busy');
+  if (!lock.tryLock(CFG.LOCK_WAIT_MS)) throw E_('busy');
   try { return fn(); } finally { lock.releaseLock(); }
 }
 
