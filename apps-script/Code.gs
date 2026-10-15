@@ -629,6 +629,56 @@ function resetDevice(pin, id) {
   }));
 }
 
+// ===== סימון נוכחות ידני =====
+// רשימת השיעורים שנפתח בהם רישום, מהחדש לישן, לבחירה במסך המרצה
+function listSessions(pin) {
+  return adminApi_(pin, () => rows_(sheet_(SH.SESSIONS), 5)
+    .map(v => ({ s: String(v[0]), date: v[1], label: String(v[2] || ''), rounds: Number(v[3]) || 0 }))
+    .filter(x => x.s && x.rounds > 0)
+    .reverse()
+    .map(x => ({
+      s: x.s,
+      title: (x.date instanceof Date ? Utilities.formatDate(x.date, CFG.TZ, 'dd/MM HH:mm') : x.s) + (x.label ? ' · ' + x.label : '')
+    })));
+}
+
+// מסמן סטודנט כנוכח בשיעור מסוים, לסטודנט שהיה בכיתה ולא הצליח להירשם
+function markManual(pin, id, s) {
+  return adminApi_(pin, () => {
+    id = normId_(id);
+    s = String(s || '');
+    const st = loadStudents_(true).find(x => x.id === id);
+    if (!st) throw E_('notfound');
+    const sess = rows_(sheet_(SH.SESSIONS), 5).map(v => ({ s: String(v[0]), rounds: Number(v[3]) || 0 }))
+      .filter(x => x.s === s && x.rounds > 0)[0];
+    if (!sess) throw E_('nosession');
+    const res = withLock_(() => {
+      const have = {};
+      checkinRows_(s).forEach(x => { if (x.id === id && x.status === STATUS_OK) have[x.r] = true; });
+      const missing = [];
+      for (let r = 1; r <= sess.rounds; r++) if (!have[r]) missing.push(r);
+      if (!missing.length) return { already: true, name: st.name };
+      const sh = sheet_(SH.CHECKINS);
+      let row = sh.getLastRow() + 1;
+      const P = props_();
+      const next = Number(P.getProperty('NEXT_ROW')) || 0;
+      if (next > row) row = next;          // לא לדרוס שורה ששמורה לרישום שעוד נכתב
+      const vals = missing.map(r => [new Date(), s, r, st.id, st.name, 'ידני', '', STATUS_OK, '', '', '']);
+      sh.getRange(row, 1, vals.length, 11).setValues(vals);
+      if (next) P.setProperty('NEXT_ROW', String(row + vals.length));
+      const c = cache_();
+      missing.forEach(r => {
+        c.put(['ck', s, r, st.id].join('|'), '1', CFG.CACHE_TTL);
+        const k = ['cnt', s, r].join('|'), n = c.get(k);
+        if (n !== null) c.put(k, String(Number(n) + 1), CFG.CACHE_TTL);
+      });
+      return { ok: true, name: st.name };
+    });
+    try { buildReport_(); } catch (e) { console.error(e); }
+    return res;
+  });
+}
+
 function makeReport(pin) {
   return adminApi_(pin, () => ({ sessions: buildReport_() }));
 }

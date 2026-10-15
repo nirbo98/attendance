@@ -204,6 +204,7 @@ function act(fn, project) {
       S.active = await fn();
       roundEnd = 0;
       renderSession();
+      loadSessionsList();
       if (S.active && S.active.open) { startCode(); if (project) projOn(); } else stopCode();
       refreshStats();
     } catch (e) { if (m) m.textContent = errText(e); }
@@ -254,6 +255,10 @@ function renderTools() {
     '<p class="mute">הדוח מופיע בלשונית "דוח נוכחות" בגיליון. מי שנוכחותו מתחת לשמונים אחוז מסומן באדום.</p>' +
     '<p class="mute" style="margin-top:14px">סטודנט החליף טלפון? איפוס מאפשר לו להירשם מחדש בלי סימון.</p>' +
     '<div class="row"><input id="rid" inputmode="numeric" placeholder="ת״ז"><button class="ghost" id="rs">איפוס טלפון</button></div>' +
+    '<h2 style="margin-top:18px">סימון נוכחות ידני</h2>' +
+    '<p class="mute">לסטודנט שהיה בכיתה ולא הצליח להירשם.</p>' +
+    '<div class="row"><input id="mid" inputmode="numeric" placeholder="ת״ז"><select id="msess" style="font-size:15px;padding:10px;border:1px solid var(--line);border-radius:10px;max-width:100%"><option value="">טוען שיעורים…</option></select>' +
+    '<button id="mbtn">סימון כנוכח</button></div><div class="msg" id="mMsg"></div>' +
     '<div class="row" style="margin-top:14px"><button class="ghost" id="impOpen">ייבוא או עדכון רשימת סטודנטים</button></div>' +
     '<div id="impBox"></div>' +
     '<div class="msg" id="toolMsg"></div>';
@@ -268,7 +273,33 @@ function renderTools() {
     try { const r = await call('makeReport'); m.textContent = 'הדוח עודכן (' + r.sessions + ' שיעורים).'; }
     catch (e) { m.textContent = errText(e); }
   };
+  loadSessionsList();
+  document.getElementById('mbtn').onclick = async () => {
+    const mm = document.getElementById('mMsg'), b = document.getElementById('mbtn');
+    const id = document.getElementById('mid').value, sess = document.getElementById('msess').value;
+    if (!id.replace(/\D/g, '')) { mm.textContent = 'צריך להקליד ת"ז.'; return; }
+    if (!sess) { mm.textContent = 'עוד אין שיעור שנפתח בו רישום.'; return; }
+    b.disabled = true; mm.textContent = 'מסמן…';
+    try {
+      const r = await call('markManual', id, sess);
+      mm.textContent = r.already ? r.name + ' כבר רשום/ה בשיעור הזה.' : 'סומן: ' + r.name + '. הדוח עודכן.';
+      document.getElementById('mid').value = '';
+      refreshStats();
+    } catch (e) { mm.textContent = e && e.error === 'notfound' ? 'הת"ז לא נמצאה ברשימת הסטודנטים.' : errText(e); }
+    b.disabled = false;
+  };
   document.getElementById('impOpen').onclick = () => { renderImport('impBox', false); document.getElementById('impOpen').remove(); };
+}
+
+async function loadSessionsList() {
+  const sel = document.getElementById('msess');
+  if (!sel) return;
+  try {
+    const list = await call('listSessions');
+    sel.innerHTML = list.length
+      ? list.map(x => '<option value="' + esc(x.s) + '">' + esc(x.title) + '</option>').join('')
+      : '<option value="">אין עדיין שיעורים</option>';
+  } catch (e) { sel.innerHTML = '<option value="">לא נטען</option>'; }
 }
 
 // ===== קוד מתחלף =====
