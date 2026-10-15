@@ -15,9 +15,9 @@
 // ===== הגדרות =====
 const CFG = {
   ROTATE_SECONDS: 20,          // כל כמה שניות הקוד על המסך מתחלף (מספיק זמן למצלמה להתמקד)
-  ACCEPT_PREVIOUS: 2,          // קוד נשאר תקף עוד 2 החלפות: 40 עד 60 שניות מהרגע שהופיע
+  ACCEPT_PREVIOUS: 3,          // קוד נשאר תקף עוד 3 החלפות: 60 עד 80 שניות מהרגע שהופיע
   LOCK_WAIT_MS: 8000,          // בקשה שלא קיבלה תור תוך 8 שניות חוזרת לטלפון, שמנסה שוב מאוחר יותר
-  PASS_TTL_SECONDS: 180,       // כמה זמן יש לסטודנט להשלים רישום אחרי סריקה תקינה
+  PASS_TTL_SECONDS: 300,       // אחרי סריקה תקינה, לסטודנט יש 5 דקות להשלים רישום (גם כשיש עומס)
   ROUND_MINUTES: 10,           // הרישום נסגר לבד אחרי כמה דקות
   SINGLE_ROUND: true,          // רישום אחד לשיעור. "פתיחה מחדש" ממשיכה את אותו רישום (למאחרים)
   SPOT_CHECK_SIZE: 10,         // כמה שמות בכל בדיקת פתע
@@ -313,7 +313,15 @@ function scanCheckIn(req) {
     const token = cleanToken_(req.token);
     const st = token && loadStudents_().find(x => x.token === token);
     if (!st) return { boot: boot, res: { needRegister: true } };
-    return { boot: boot, res: finish_(withLock_(() => record_(st, boot.s, boot.r, []))) };
+    // אם יש עומס, מחזירים לטלפון את האישור שהקוד תקין. הטלפון ממשיך לנסות עם האישור הזה,
+    // שתקף 5 דקות, כך שהקוד על המסך כבר לא יכול "לפוג" לו באמצע.
+    let res;
+    try { res = finish_(withLock_(() => record_(st, boot.s, boot.r, []))); }
+    catch (e) {
+      if (String(e && e.message || '').indexOf('E:busy') === 0) res = { error: 'busy' };
+      else throw e;
+    }
+    return { boot: boot, res: res };
   });
 }
 

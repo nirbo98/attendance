@@ -63,8 +63,8 @@ async function callOnce(action, arg) {
 // ניסיון חוזר אוטומטי כשהשרת עמוס, כדי שהסטודנט לא יצטרך לסרוק שוב.
 // כל הפעולות בטוחות לחזרה: רישום כפול פשוט מחזיר "כבר נרשמת".
 async function call(action, arg) {
-  // עד כחצי דקה של ניסיונות, מרווחים ומפוזרים אקראית כדי שכל הכיתה לא תחזור לשרת באותה שנייה
-  const waits = [700, 1400, 2400, 3500, 5000, 6500, 8000];
+  // עד כדקה של ניסיונות, מרווחים ומפוזרים אקראית כדי שכל הכיתה לא תחזור לשרת באותה שנייה
+  const waits = [700, 1400, 2400, 3500, 5000, 6500, 8000, 10000, 12000];
   for (let i = 0; ; i++) {
     let res;
     try { res = await callOnce(action, arg); }
@@ -192,8 +192,14 @@ async function start() {
     BOOT = first.boot || { state: 'server' };
   }
   if (BOOT.state !== 'ok') { const m = MSG[BOOT.state] || MSG.noscan; return screen(m[0], m[1], m[2], BOOT.state === 'noscan' ? '' : 'bad'); }
-  const res = first && first.res;
+  let res = first && first.res;
   if (!res) return showError(null);
+  // הקוד אושר אבל השרת היה עמוס: ממשיכים עם האישור, בלי צורך בקוד מהמסך
+  if (res.error === 'busy') {
+    loading('רושם נוכחות…');
+    try { res = await call('checkIn', auth({ token: myToken })); }
+    catch (e) { return showError({ error: 'network' }); }
+  }
   if (res.error) return showError(res);
   if (res.needRegister) return askId();
   success(res);
